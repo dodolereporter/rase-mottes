@@ -12,7 +12,7 @@ import {
   encodeInput,
   sanitizeName,
 } from '../../../shared/protocol';
-import { AxisSettings, Quat, SteerStyle, deviceQuat, relativePitchRoll, shapeAxis, steerAngle } from './orientation';
+import { AxisSettings, Quat, SteerStyle, deviceQuat, relativePitchRoll, shapeAxis, steerAngle, upAngleFromGravity } from './orientation';
 
 // ---------------------------------------------------------------------------
 // État
@@ -93,15 +93,33 @@ function applyUiRotation() {
   st.cssText = `position:fixed;left:50%;top:50%;inset:auto;width:${swap ? '100vh' : '100vw'};height:${swap ? '100vw' : '100vh'};transform:translate(-50%,-50%) rotate(${rot}deg);`;
 }
 
+// Repère de pilotage : on déduit « le haut de l'écran » de la gravité au calibrage,
+// sans se fier à screen.orientation.angle (faux de 180° sur certains iPhone).
+let raw: [number, number, number] | null = null;
+let ctrlAngle = screenAngle();
+
+function calibrateFrame() {
+  if (!raw) return;
+  const a = upAngleFromGravity(raw[0], raw[1], raw[2]);
+  ctrlAngle = a ?? screenAngle();
+}
+
 function recenter() {
-  if (qCur) qRef = [...qCur] as Quat;
+  if (raw) {
+    calibrateFrame();
+    qCur = deviceQuat(raw[0], raw[1], raw[2], ctrlAngle);
+    qRef = [...qCur] as Quat;
+  }
   vibrate(12);
 }
 
 function onOrientation(e: DeviceOrientationEvent) {
   if (e.beta === null || e.gamma === null) return;
   gotSensor = true;
-  qCur = deviceQuat(e.alpha ?? 0, e.beta, e.gamma, lockAngle);
+  const first = !raw;
+  raw = [e.alpha ?? 0, e.beta, e.gamma];
+  if (first) recenter();
+  qCur = deviceQuat(raw[0], raw[1], raw[2], ctrlAngle);
   if (!qRef) qRef = [...qCur] as Quat;
   const r = relativePitchRoll(qRef, qCur);
   roll = shapeAxis(steerAngle(r, settings.steer), settings);

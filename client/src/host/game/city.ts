@@ -36,6 +36,7 @@ const s = new Vector3();
 const tmpColor = new Color();
 const zAxis = new Vector3(0, 0, 1);
 
+const TINTS = ['#2b2d38', '#3a2c2a', '#1d2a3a', '#2f2440', '#283230'].map((h) => new Color(h));
 const CONTAINER_COLORS = ['#7a2a1e', '#1e4a7a', '#2a6a3a', '#7a6a1e', '#5a5a64', '#7a3a5a'].map((h) => new Color(h));
 
 /** Conversion repère du jeu (z avant) -> repère three (z vers la caméra). */
@@ -99,7 +100,7 @@ class ChunkView {
       this.statics.setMatrixAt(n, m4);
       const code = KIND_CODE[kind] ?? 2;
       style.setXYZW(n, code, rnd, kind === 'wall' || kind === 'decor' ? (rnd > 0.3 ? 1 : 0.2) : 1, 1);
-      if (code === 0) tmpColor.copy(pal.building).multiplyScalar(0.75 + rnd * 0.5);
+      if (code === 0) tmpColor.copy(pal.building).lerp(TINTS[Math.floor(rnd * 997) % TINTS.length], 0.3).multiplyScalar(0.7 + ((rnd * 13.7) % 1) * 0.6);
       else if (code === 4) tmpColor.copy(CONTAINER_COLORS[Math.floor(rnd * CONTAINER_COLORS.length)]);
       else if (code === 1) tmpColor.copy(pal.building).multiplyScalar(0.6);
       else tmpColor.copy(pal.building).multiplyScalar(0.55).lerp(pal.neonA, 0.05);
@@ -138,6 +139,17 @@ class ChunkView {
         put({ minX: cx - 0.5, maxX: cx + 0.5, minZ: cz - 0.5, maxZ: cz + 0.5, minY: top + 6, maxY: top + 7 }, 'beacon', rng.float());
       }
       if (!facade || h < 9) return;
+      // lampadaires le long du trottoir
+      {
+        const pathXl = this.world.pathAt((b.minZ + b.maxZ) / 2).x;
+        const isLeft = (b.minX + b.maxX) / 2 < pathXl;
+        const fx = isLeft ? b.maxX : b.minX;
+        const dir = isLeft ? 1 : -1;
+        for (let zz = b.minZ + 4; zz < b.maxZ - 2; zz += 24) {
+          put({ minX: Math.min(fx, fx + dir * 0.3), maxX: Math.max(fx, fx + dir * 0.3), minY: 0, maxY: 7, minZ: zz - 0.12, maxZ: zz + 0.12 }, 'beam', 0.1);
+          put({ minX: Math.min(fx, fx + dir * 1.8), maxX: Math.max(fx, fx + dir * 1.8), minY: 6.8, maxY: 7.1, minZ: zz - 0.3, maxZ: zz + 0.3 }, 'lamp', 0.5);
+        }
+      }
       // enseigne sur la façade côté couloir
       const pathX = this.world.pathAt((b.minZ + b.maxZ) / 2).x;
       const left = (b.minX + b.maxX) / 2 < pathX;

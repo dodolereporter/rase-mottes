@@ -2,6 +2,9 @@
 
 import {
   ACESFilmicToneMapping,
+  AdditiveBlending,
+  Points,
+  PointsMaterial,
   BufferAttribute,
   BufferGeometry,
   Color,
@@ -55,6 +58,46 @@ const QUALITY_LEVELS = [
   { pr: 0.7, bloom: false },
 ];
 
+/** Circulation aérienne lointaine : files de feux qui filent entre les tours (décor). */
+class Traffic {
+  readonly points: Points;
+  private n = 360;
+  private lane = new Float32Array(this.n * 4); // décalage x, y, vitesse, z
+  private pos = new Float32Array(this.n * 3);
+  private col = new Float32Array(this.n * 3);
+  constructor() {
+    for (let i = 0; i < this.n; i++) {
+      const side = Math.random() < 0.5 ? -1 : 1;
+      const dir = Math.random() < 0.5 ? -1 : 1;
+      this.lane[i * 4] = side * (40 + Math.random() * 110);
+      this.lane[i * 4 + 1] = 35 + Math.floor(Math.random() * 6) * 14 + Math.random() * 2;
+      this.lane[i * 4 + 2] = dir * (35 + Math.random() * 40);
+      this.lane[i * 4 + 3] = Math.random() * 1200;
+      const c = dir > 0 ? new Color('#ff3030') : new Color('#fff2d0');
+      c.multiplyScalar(dir > 0 ? 1.2 : 1.6);
+      this.col.set([c.r, c.g, c.b], i * 3);
+    }
+    const geo = new BufferGeometry();
+    geo.setAttribute('position', new BufferAttribute(this.pos, 3));
+    geo.setAttribute('color', new BufferAttribute(this.col, 3));
+    this.points = new Points(geo, new PointsMaterial({ size: 2.2, vertexColors: true, transparent: true, blending: AdditiveBlending, depthWrite: false, sizeAttenuation: true }));
+    this.points.frustumCulled = false;
+  }
+  update(dt: number, baseZ: number, world: World) {
+    for (let i = 0; i < this.n; i++) {
+      let rz = this.lane[i * 4 + 3] + this.lane[i * 4 + 2] * dt;
+      rz = ((rz % 1200) + 1200) % 1200;
+      this.lane[i * 4 + 3] = rz;
+      const z = baseZ - 100 + rz;
+      const p = world.pathAt(Math.max(0, z));
+      this.pos[i * 3] = p.x + this.lane[i * 4];
+      this.pos[i * 3 + 1] = this.lane[i * 4 + 1];
+      this.pos[i * 3 + 2] = -z;
+    }
+    this.points.geometry.attributes.position.needsUpdate = true;
+  }
+}
+
 export class GameRenderer {
   renderer: WebGLRenderer;
   scene = new Scene();
@@ -68,6 +111,7 @@ export class GameRenderer {
   private groundMat = createGroundMaterial();
   private debugLines: LineSegments | null = null;
   private ceiling: Mesh;
+  private traffic = new Traffic();
   private ceilingMat = createCeilingMaterial();
   private width = 1;
   private height = 1;
@@ -102,6 +146,7 @@ export class GameRenderer {
     this.scene.add(this.ground);
     this.scene.add(this.particles.points);
 
+    this.scene.add(this.traffic.points);
     this.ceiling = new Mesh(new PlaneGeometry(300, 1400), this.ceilingMat);
     this.ceiling.rotation.x = -Math.PI / 2;
     this.ceiling.frustumCulled = false;
@@ -355,6 +400,9 @@ export class GameRenderer {
     });
 
     this.particles.update(realDt);
+    if (this.views[0]) this.traffic.update(realDt, this.views[0].pilot.z, this.world);
+    // en tunnel, pas de circulation aérienne visible
+    this.traffic.points.visible = !!this.views[0] && this.world.districtDef(this.views[0].pilot.z).ceiling === undefined;
     if (this.debugLines && this.views[0]) this.updateDebug(this.views[0].pilot, t);
     this.post.render(views, t);
   }

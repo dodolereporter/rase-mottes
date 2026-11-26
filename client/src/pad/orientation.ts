@@ -68,6 +68,18 @@ export function steerAngle(r: { roll: number; yaw: number }, style: SteerStyle):
   return r.roll + r.yaw * 1.3;
 }
 
+/**
+ * Angle d'écran (deg, multiple de 90) tel que le haut de l'écran soit le plus proche
+ * de la verticale réelle. null si le téléphone est tenu presque à plat.
+ */
+export function upAngleFromGravity(alpha: number, beta: number, gamma: number): number | null {
+  const qd = deviceQuat(alpha, beta, gamma, 0);
+  const up = rotateVec(quatConj(qd), [0, 0, 1]); // verticale du monde dans le repère de l'appareil
+  if (Math.hypot(up[0], up[1]) < 0.35) return null;
+  const a = Math.atan2(up[0], up[1]) / DEG;
+  return (((Math.round(a / 90) * 90) % 360) + 360) % 360;
+}
+
 export interface AxisSettings {
   sensitivity: number; // 0.5 .. 2
   deadZone: number; // 0 .. 0.25

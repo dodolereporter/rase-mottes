@@ -89,28 +89,86 @@ export function createStructureMaterial(): ShaderMaterial {
         vec3 neon = mix(uNeonA, uNeonB, step(0.5, vStyle.y));
 
         if (kind == 0) {
-          // immeubles : fenêtres procédurales sur les faces latérales
+          // ---- immeubles ----
+          float rnd = vStyle.y;
+          float bt = fract(rnd * 7.13);
+          float bid = floor(rnd * 997.0);
+          float glass = step(0.35, bt) * step(bt, 0.6);
+          // ombrage au pied, ciel en haut
+          col *= 0.5 + 0.5 * smoothstep(0.0, 10.0, vWorld.y);
+          col *= 0.85 + 0.25 * smoothstep(20.0, 120.0, vWorld.y);
+          vec3 V = normalize(cameraPosition - vWorld);
+          float fres = pow(1.0 - max(dot(n, V), 0.0), 3.0);
           if (abs(n.y) < 0.5) {
             float u = abs(n.x) > 0.5 ? vWorld.z : vWorld.x;
-            vec2 cell = floor(vec2(u / 2.6, vWorld.y / 3.4));
-            vec2 f = fract(vec2(u / 2.6, vWorld.y / 3.4));
-            float win = step(0.2, f.x) * step(f.x, 0.8) * step(0.25, f.y) * step(f.y, 0.78);
-            float h = hash(cell + vStyle.y * 91.0);
-            float lit = step(0.72, h);
-            vec3 wc = mix(uWindow, vec3(0.55, 0.85, 1.0), step(0.85, h));
-            col += win * lit * wc * (0.18 + 0.32 * hash(cell * 1.7));
-            col += win * (1.0 - lit) * vec3(0.02, 0.03, 0.06);
+            // style de façade : bureaux / verre / résidentiel / bandeaux
+            vec2 cs = bt < 0.35 ? vec2(2.4, 3.4) : bt < 0.6 ? vec2(3.2, 3.6) : bt < 0.85 ? vec2(1.8, 3.0) : vec2(7.0, 3.8);
+            vec2 fill = bt < 0.35 ? vec2(0.6, 0.55) : bt < 0.6 ? vec2(0.93, 0.86) : bt < 0.85 ? vec2(0.48, 0.5) : vec2(0.97, 0.42);
+            vec2 uv = vec2(u, vWorld.y - 0.3) / cs;
+            vec2 cell = floor(uv);
+            vec2 f = fract(uv) - 0.5;
+            vec2 fw = fwidth(uv);
+            float wx = 1.0 - smoothstep(fill.x * 0.5 - fw.x, fill.x * 0.5 + fw.x, abs(f.x));
+            float wy = 1.0 - smoothstep(fill.y * 0.5 - fw.y, fill.y * 0.5 + fw.y, abs(f.y));
+            float win = wx * wy;
+            // au loin, on moyenne le motif (pas de scintillement)
+            float far = smoothstep(0.3, 0.9, max(fw.x, fw.y));
+            win = mix(win, fill.x * fill.y, far);
+            // éclairage des pièces : par fenêtre, ou par étage entier pour les tours de verre
+            float hWin = hash(cell + bid * 0.37);
+            float hFloor = hash(vec2(cell.y, bid));
+            float litRate = 0.18 + 0.3 * fract(rnd * 3.7);
+            float lit = glass > 0.5 ? step(1.0 - litRate * 1.3, hFloor) * step(0.15, hWin) : step(1.0 - litRate, hWin);
+            lit = mix(lit, litRate, far);
+            vec3 warm = uWindow;
+            vec3 cool = vec3(0.6, 0.85, 1.0);
+            vec3 wc = hWin > 0.9 ? cool : hWin > 0.82 ? mix(uNeonA, uNeonB, step(0.86, hWin)) * 0.8 : warm;
+            // stores : lignes horizontales dans les fenêtres éclairées
+            float blinds = 0.85 + 0.15 * step(0.5, fract(uv.y * 9.0));
+            float inner = 0.6 + 0.4 * smoothstep(-0.5, 0.5, f.y);
+            // vitrage sombre qui reflète le ciel / le brouillard
+            vec3 pane = mix(vec3(0.015, 0.02, 0.04), fogColor * 0.9 + uNeonB * 0.05, fres * (0.4 + glass * 0.6));
+            vec3 facade = col;
+            // dalles d'étage et meneaux
+            float slab = 1.0 - smoothstep(0.0, 0.08 + fw.y, abs(f.y + 0.5) );
+            facade *= 1.0 + slab * 0.6 * (1.0 - far);
+            vec3 lightCol = wc * (0.16 + 0.26 * hash(cell * 1.7)) * blinds * inner;
+            // fenêtres qui clignotent (télé)
+            lightCol *= hWin > 0.985 ? 0.6 + 0.4 * sin(uTime * 9.0 + bid) : 1.0;
+            col = mix(facade, pane + lightCol * lit, win);
+            // verre : reflet plus présent
+            col = mix(col, fogColor * 1.1 + uNeonA * 0.04, fres * glass * 0.35);
+            // rez-de-chaussée : vitrines éclairées et auvent néon
+            float shop = 1.0 - step(4.2, vWorld.y);
+            float seg = floor(u / 9.0);
+            float shopOn = step(0.35, hash(vec2(seg, bid)));
+            vec3 shopCol = mix(uNeonA, uNeonB, hash(vec2(seg * 1.3, bid))) * 0.35 + uWindow * 0.18;
+            float shopWin = step(0.08, fract(u / 9.0)) * step(fract(u / 9.0), 0.92) * step(0.4, vWorld.y) * step(vWorld.y, 3.6);
+            col = mix(col, vColor * 0.25 + shopCol * shopWin * shopOn, shop);
+            float awning = 1.0 - smoothstep(0.0, 0.12 + fw.y, abs(vWorld.y - 4.2));
+            col += mix(uNeonA, uNeonB, hash(vec2(seg, bid + 3.0))) * awning * shopOn * 0.8;
+            // néons d'angle sur certaines tours
+            float dh = abs(vObjN.x) > 0.5 ? d.z : d.x;
+            float corner = (1.0 - smoothstep(0.08, 0.3, dh)) * step(0.72, fract(rnd * 11.3));
+            col += neon * corner * 0.9;
+          } else if (n.y > 0.5) {
+            // toit : sombre, avec un léger quadrillage
+            vec2 rg = abs(fract(vWorld.xz / 3.0) - 0.5);
+            col *= 0.55 + 0.15 * step(0.46, max(rg.x, rg.y));
           }
           // liseré néon au sommet
           float top = (0.5 - vLocal.y) * vSize.y;
-          col += neon * (1.0 - smoothstep(0.0, 0.4, top)) * 0.9 * step(0.35, vStyle.z);
-          col += neon * edge * 0.18 * vStyle.z;
+          col += neon * (1.0 - smoothstep(0.0, 0.35, top)) * 0.8 * step(0.35, vStyle.z) * step(abs(n.y), 0.5);
+          col += neon * edge * 0.12 * vStyle.z;
         } else if (kind == 9) {
           // enseigne néon animée
           vec3 nc = mix(uNeonA, uNeonB, fract(vStyle.y * 7.0));
           float bands = step(0.5, fract((vWorld.y + vWorld.x + vWorld.z) * 0.6 - uTime * (0.5 + vStyle.y)));
           float flick = step(0.04, fract(sin(floor(uTime * 8.0) + vStyle.y * 50.0) * 43758.5));
           col = nc * (0.5 + 0.6 * bands) * (0.4 + 0.6 * flick) + nc * edge * 0.8;
+        } else if (kind == 13) {
+          // lampadaire : tête lumineuse chaude
+          col = uWindow * 1.4 + vec3(0.3);
         } else if (kind == 10) {
           // balise de toit
           col = vec3(1.6, 0.08, 0.1) * step(0.55, fract(uTime * 0.7 + vStyle.y));

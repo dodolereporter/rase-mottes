@@ -12,7 +12,7 @@ import {
 } from '../../shared/protocol';
 import { Pilot } from '../../shared/sim';
 import { World } from '../../shared/world';
-import { axisAngle, deviceQuat, quatMul, relativePitchRoll, steerAngle } from '../../client/src/pad/orientation';
+import { axisAngle, deviceQuat, quatMul, relativePitchRoll, steerAngle, upAngleFromGravity } from '../../client/src/pad/orientation';
 
 describe('protocole binaire', () => {
   it('encode et décode un paquet de 12 octets', () => {
@@ -109,6 +109,15 @@ describe('orientation du téléphone', () => {
     expect(r.yaw).toBeCloseTo(15, 3);
     expect(Math.abs(r.roll)).toBeLessThan(1e-6);
     expect(steerAngle(r, 'both')).toBeGreaterThan(0);
+  });
+  it('déduit l’orientation de l’écran de la gravité', () => {
+    // portrait debout : beta = 90
+    expect(upAngleFromGravity(0, 90, 0)).toBe(0);
+    // paysage (appareil tourné d'un quart de tour vers la gauche) : gamma = -90 environ
+    expect(upAngleFromGravity(0, 0, -80)).toBe(90);
+    expect(upAngleFromGravity(0, 0, 80)).toBe(270);
+    // à plat : indéterminé
+    expect(upAngleFromGravity(0, 2, 3)).toBeNull();
   });
   it('basculer le haut vers l’avant donne un tangage positif', () => {
     const q = quatMul(ref, axisAngle(1, 0, 0, (-10 * Math.PI) / 180));

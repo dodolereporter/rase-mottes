@@ -145,6 +145,7 @@ export const KIND_CODE: Record<string, number> = {
   hub: 2,
   sign: 9,
   beacon: 10,
+  lamp: 13,
   container: 4,
   gantry: 2,
   drone: 5,
