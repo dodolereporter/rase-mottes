@@ -625,24 +625,24 @@ class HostApp {
         if (!e.ground) this.renderer.sparks(i, e.side);
         this.renderer.kick(i, 0.35, 0.08, [1, 0.85, 0.3]);
         this.haptic(owner, 'graze');
-        this.popup(view, e.ground ? `RASE-MOTTES +${e.pts}` : `FRÔLÉ +${e.pts}`, e.ground ? '#7dff5a' : '#ffd23e', e.side);
+        this.popup(view, e.ground ? `RASE-MOTTES +${e.pts}` : `FRÔLÉ +${e.pts}`, e.ground ? '#4f8a3c' : '#ff5a36', e.side);
         break;
       case 'ring':
         this.audio.ring(e.perfect);
         this.renderer.kick(i, 0.1, e.perfect ? 0.2 : 0.08, [1, 0.9, 0.4]);
         this.haptic(owner, 'ring');
-        this.popup(view, e.perfect ? `PARFAIT +${e.pts}` : `+${e.pts}`, '#ffe14d', 0);
+        this.popup(view, e.perfect ? `PARFAIT +${e.pts}` : `+${e.pts}`, '#c98a00', 0);
         break;
       case 'pickup':
         this.audio.pickup();
         this.haptic(owner, 'bonus');
-        this.popup(view, e.kind === 'shield' ? 'BOUCLIER' : e.kind === 'slowmo' ? 'RALENTI' : 'AIMANT', '#4dd2ff', 0);
+        this.popup(view, e.kind === 'shield' ? 'BOUCLIER' : e.kind === 'slowmo' ? 'RALENTI' : 'AIMANT', '#2f5bff', 0);
         break;
       case 'shieldHit':
         this.audio.shieldHit();
         this.renderer.kick(i, 1, 0.5, [0.3, 0.8, 1]);
         this.haptic(owner, 'crash');
-        this.popup(view, 'BOUCLIER BRISÉ', '#4dd2ff', 0);
+        this.popup(view, 'BOUCLIER BRISÉ', '#2f5bff', 0);
         break;
       case 'brake':
         this.audio.brake();
@@ -724,7 +724,7 @@ class HostApp {
           `<li class="${highlight && e.name === highlight.name && e.score === highlight.score ? 'me' : ''}"><span class="r">${i + 1}</span><span>${esc(e.name)}</span><span class="num">${fmt(e.distance)} m</span><span class="num">${fmt(e.score)}</span></li>`,
       )
       .join('');
-    return `<div class="board"><h3>${title}</h3><ol>${rows || '<li><span></span><span class="small">Aucun score pour l’instant. À toi !</span></li>'}</ol></div>`;
+    return `<div class="board glass"><h3>${title}</h3><ol>${rows || '<li><span></span><span class="small">Aucun score pour l’instant. À toi de jouer.</span></li>'}</ol></div>`;
   }
 
   renderScreen() {
@@ -746,9 +746,10 @@ class HostApp {
       ui.innerHTML = `
         <div class="lobby">
           <div class="left">
-            <h1 class="title">RASE-MOTTES</h1>
-            <p class="tagline">Scanne le QR code, tiens ton téléphone comme un volant, et file au ras de la ville.</p>
-            <div class="qrbox">
+            <div class="eyebrow">Arcade · téléphone = manette</div>
+            <h1 class="title">Rase<br/>Mottes<span class="dot">.</span></h1>
+            <p class="tagline">Scanne le code, tiens ton téléphone à deux mains et penche-le pour piloter. Frôle tout, ne touche rien.</p>
+            <div class="qrbox glass">
               <div class="qr">${this.qrSvg || ''}</div>
               <div>
                 <div class="small">Code du salon</div>
@@ -760,10 +761,10 @@ class HostApp {
           </div>
           <div class="left">
             <div class="modes">${GAME_MODES.map((m, i) => `<button class="mode interactive ${m === this.mode ? 'sel' : ''}" data-mode="${m}"><b>${i + 1}. ${MODE_LABEL[m]}</b><span>${modeDesc[m]}</span></button>`).join('')}</div>
-            ${this.mode === 'party' ? '<div class="board"><h3>Soirée</h3><div class="small">Chaque joueur appuie sur « Prêt » sur son téléphone. La partie démarre quand tout le monde est prêt.</div></div>' : this.boardHtml(this.mode === 'daily' ? 'Classement du jour' : 'Meilleurs pilotes', this.leaderboard)}
+            ${this.mode === 'party' ? '<div class="board glass"><h3>Soirée</h3><div class="small">Chaque joueur appuie sur « Prêt » sur son téléphone. La partie démarre quand tout le monde est prêt.</div></div>' : this.boardHtml(this.mode === 'daily' ? 'Classement du jour' : 'Meilleurs pilotes', this.leaderboard)}
             <div class="keys">Choix du mode et départ depuis le téléphone. Sans téléphone : <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> mode, <kbd>Entrée</kbd> jouer, flèches/ZQSD, <kbd>Espace</kbd> boost, <kbd>Maj</kbd> frein, <kbd>P</kbd> pause, <kbd>M</kbd> muet.</div>
           </div>
-          ${this.audio.started ? '' : '<div class="sound">🔇 Clique n’importe où pour activer le son</div>'}
+          ${this.audio.started ? '' : '<div class="sound glass">Clique n’importe où pour activer le son</div>'}
         </div>`;
       ui.querySelectorAll<HTMLButtonElement>('[data-mode]').forEach((b) => (b.onclick = () => this.setMode(b.dataset.mode as GameMode)));
       this.hudEls = {};
@@ -800,7 +801,7 @@ class HostApp {
                 <div class="stat"><b class="num">${fmt(r.maxSpeed * 3.6)} km/h</b><span>Vitesse max</span></div>
                 <div class="stat"><b class="num">${r.rings}${r.perfects ? ` <small>(${r.perfects}★)</small>` : ''}</b><span>Anneaux</span></div>
               </div>
-              <div class="cta">📱 « Rejouer » sur le téléphone · <kbd>Entrée</kbd></div>
+              <div class="cta">« Rejouer » sur le téléphone <kbd>Entrée</kbd></div>
             </div>
             ${this.boardHtml(this.mode === 'daily' ? 'Classement du jour' : 'Classement', this.leaderboard, { name: r.name, score: r.score })}
           </div>
@@ -816,16 +817,16 @@ class HostApp {
         .sort((a, b) => (final ? b.t.dist - a.t.dist : b.d - a.d));
       ui.innerHTML = `
         <div class="center"><div class="card">
-          <h2>${final ? `🏆 ${esc(this.net.pads[rows[0].s].name)} gagne la soirée !` : `Manche ${this.round}/${ROUNDS}`}</h2>
+          <h2>${final ? `${esc(this.net.pads[rows[0].s].name)} gagne la soirée` : `Manche ${this.round}/${ROUNDS}`}</h2>
           <div class="standings">
             ${rows
               .map(
                 (r, k) =>
-                  `<div class="row ${k === 0 ? 'win' : ''}" style="--c:${PLAYER_COLORS[r.s]}"><b>${k + 1}</b><span style="color:${PLAYER_COLORS[r.s]};font-weight:800">${esc(this.net.pads[r.s].name)}</span><span class="num">${fmt(r.d)} m</span><span class="num small">total ${fmt(r.t.dist)} m · ${r.t.wins}🏁</span></div>`,
+                  `<div class="row ${k === 0 ? 'win' : ''}" style="--c:${PLAYER_COLORS[r.s]}"><b>${k + 1}</b><span style="color:${PLAYER_COLORS[r.s]};font-weight:800">${esc(this.net.pads[r.s].name)}</span><span class="num">${fmt(r.d)} m</span><span class="num small">total ${fmt(r.t.dist)} m · ${r.t.wins} manche(s)</span></div>`,
               )
               .join('')}
           </div>
-          <div class="cta">${final ? '📱 « Rejouer » pour une nouvelle soirée' : 'Manche suivante…'}</div>
+          <div class="cta">${final ? '« Rejouer » sur le téléphone pour une nouvelle soirée' : 'Manche suivante…'}</div>
         </div></div>`;
       this.hudEls = {};
     }
@@ -836,9 +837,9 @@ class HostApp {
     if (!multi) {
       ui.innerHTML = `
         <div class="hud">
-          <div class="tl"><div class="dist num" id="h-dist">0<small> m</small></div><div class="score num" id="h-score">0</div></div>
+          <div class="tl pill"><div class="dist num" id="h-dist">0<small> m</small></div><div class="score num" id="h-score">0</div></div>
           <div class="combo" id="h-combo"><div class="x" id="h-x">x1</div><div class="bar"><div id="h-cbar"></div></div></div>
-          <div class="tr"><div class="speed num" id="h-speed">0<small> km/h</small></div><div class="ping num" id="h-ping"></div></div>
+          <div class="tr pill"><div class="speed num" id="h-speed">0<small> km/h</small></div><div class="ping num" id="h-ping"></div></div>
           <div class="bottom"><div class="powerups" id="h-pu"></div><div class="boostbar" id="h-bb"><div id="h-boost"></div></div></div>
           <div class="banner" id="h-banner"></div>
           <div class="center" id="h-center"></div>
@@ -853,10 +854,12 @@ class HostApp {
               (r, i) => `
             <div class="vborder" style="left:${r.left}px;top:${r.top}px;width:${r.width}px;height:${r.height}px"></div>
             <div class="vpanel" style="left:${r.left}px;top:${r.top}px;width:${r.width}px;height:${r.height}px;--c:${PLAYER_COLORS[this.owners[i]]}">
-              <div class="name">${esc(this.net.pads[this.owners[i]].name)}</div>
-              <div class="d num" id="v-d${i}">0 m</div>
-              <div class="meta num" id="v-m${i}"></div>
-              <div class="boostbar"><div id="v-b${i}"></div></div>
+              <div class="card-mini">
+                <div class="name">${esc(this.net.pads[this.owners[i]].name)}</div>
+                <div class="d num" id="v-d${i}">0 m</div>
+                <div class="meta num" id="v-m${i}"></div>
+                <div class="boostbar"><div id="v-b${i}"></div></div>
+              </div>
               <div class="dead hidden" id="v-x${i}">CRASH</div>
             </div>`,
             )
@@ -886,9 +889,9 @@ class HostApp {
       h.boost.style.width = `${p.boost * 100}%`;
       h.bb.classList.toggle('on', p.boosting);
       const pu: string[] = [];
-      if (p.shield) pu.push('🛡 Bouclier');
-      if (p.slowmoT > 0) pu.push(`⏳ ${p.slowmoT.toFixed(1)} s`);
-      if (p.magnetT > 0) pu.push(`🧲 ${p.magnetT.toFixed(1)} s`);
+      if (p.shield) pu.push('Bouclier');
+      if (p.slowmoT > 0) pu.push(`Ralenti ${p.slowmoT.toFixed(1)} s`);
+      if (p.magnetT > 0) pu.push(`Aimant ${p.magnetT.toFixed(1)} s`);
       if (p.brakeCd > 0) pu.push(`frein ${p.brakeCd.toFixed(1)} s`);
       h.pu.innerHTML = pu.map((s) => `<span>${s}</span>`).join('');
       const owner = this.owners[0];

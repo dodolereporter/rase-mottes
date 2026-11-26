@@ -1,11 +1,14 @@
 // Moteur de rendu : scène, lumière, ombres, reflets, vues (1 à 4), caméras, effets, qualité adaptative.
 
 import {
-  ACESFilmicToneMapping,
+  NeutralToneMapping,
   AdditiveBlending,
   BufferAttribute,
   BufferGeometry,
+  CircleGeometry,
   Color,
+  MeshBasicMaterial,
+  RingGeometry,
   DirectionalLight,
   FogExp2,
   Group,
@@ -65,6 +68,8 @@ export interface PilotView {
   crashT: number;
   lastTail: Vector3 | null;
   trail: Trail;
+  blob: Mesh;
+  reticle: Mesh;
   ghost?: Group;
   ghostPos?: { x: number; y: number; z: number } | null;
 }
@@ -81,10 +86,10 @@ const QUALITY_LEVELS = [
 ];
 
 /** Caméra posée sur le décor : elle suit l'axe de la rue, le missile se déplace dans l'écran. */
-const CAM_BACK = 15;
-const CAM_UP = 4.5;
-const CAM_FOLLOW_X = 0.3; // part du déplacement latéral du missile suivie par la caméra
-const CAM_FOLLOW_Y = 0.3;
+const CAM_BACK = 13;
+const CAM_UP = 3.6;
+const CAM_FOLLOW_X = 0.62; // part du déplacement latéral du missile suivie par la caméra
+const CAM_FOLLOW_Y = 0.55;
 
 /** Circulation aérienne lointaine : files de feux entre les tours (décor). */
 class Traffic {
@@ -129,6 +134,13 @@ class Traffic {
 }
 
 const tmpV = new Vector3();
+const blobMat = new ShaderMaterial({
+  transparent: true,
+  depthWrite: false,
+  uniforms: { uOpacity: { value: 0.5 } },
+  vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+  fragmentShader: 'uniform float uOpacity; varying vec2 vUv; void main(){ float d = length(vUv - 0.5) * 2.0; gl_FragColor = vec4(0.05, 0.06, 0.1, uOpacity * (1.0 - smoothstep(0.2, 1.0, d))); }',
+});
 const tmpC = new Color();
 const WHITE = new Color('#ffffff');
 
@@ -165,7 +177,7 @@ export class GameRenderer {
   ) {
     this.renderer = new WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance', stencil: false });
     this.renderer.outputColorSpace = SRGBColorSpace;
-    this.renderer.toneMapping = ACESFilmicToneMapping;
+    this.renderer.toneMapping = NeutralToneMapping;
     this.renderer.toneMappingExposure = 1;
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = PCFSoftShadowMap;
@@ -287,13 +299,22 @@ export class GameRenderer {
 
   setPilots(list: { pilot: Pilot; color: string; label?: string }[], ghost = false) {
     for (const v of this.views) {
-      this.scene.remove(v.missile, v.trail.mesh);
+      this.scene.remove(v.missile, v.trail.mesh, v.blob, v.reticle);
       if (v.ghost) this.scene.remove(v.ghost);
     }
     this.views = list.map(({ pilot, color, label }) => {
       const missile = createMissile(color);
-      const trail = new Trail(new Color(color).lerp(new Color('#ffffff'), 0.45).multiplyScalar(1.6));
-      this.scene.add(missile, trail.mesh);
+      const trail = new Trail(new Color(color).lerp(new Color('#ffffff'), 0.55));
+      // ombre portée douce au sol (lecture de la hauteur) et réticule de visée
+      const blob = new Mesh(new CircleGeometry(1.6, 24), blobMat.clone());
+      blob.rotation.x = -Math.PI / 2;
+      blob.renderOrder = 2;
+      const reticle = new Mesh(
+        new RingGeometry(0.9, 1.15, 32),
+        new MeshBasicMaterial({ color: new Color(color), transparent: true, opacity: 0.85, depthWrite: false, fog: false }),
+      );
+      reticle.renderOrder = 6;
+      this.scene.add(missile, trail.mesh, blob, reticle);
       const camera = new PerspectiveCamera(62, 1, 0.3, 3000);
       const pp = this.world.pathAt(Math.max(0, pilot.z - CAM_BACK));
       const v: PilotView = {
@@ -316,6 +337,8 @@ export class GameRenderer {
         crashT: 0,
         lastTail: null,
         trail,
+        blob,
+        reticle,
       };
       if (ghost) {
         v.ghost = createMissile('#ffffff', true);
@@ -450,6 +473,17 @@ export class GameRenderer {
       const sh = v.missile.getObjectByName('shield');
       if (sh) sh.visible = p.shield;
 
+      // ---- ombre au sol + réticule (où la fusée sera dans ~0,45 s)
+      v.blob.visible = p.alive;
+      v.blob.position.set(x, 0.04, -z);
+      const hgt = Math.max(0, y);
+      v.blob.scale.setScalar(0.7 + hgt * 0.03);
+      (v.blob.material as ShaderMaterial).uniforms.uOpacity.value = clamp(0.55 - hgt * 0.012, 0.12, 0.55);
+      v.reticle.visible = p.alive;
+      const la = 0.45;
+      v.reticle.position.set(x + p.vx * la, y + p.vy * la, -(z + p.speed * la));
+      v.reticle.scale.setScalar(1 + p.speed * la * 0.012);
+
       // ---- traînée : ruban continu + quelques étincelles chaudes près de la tuyère
       if (p.alive && v.missile.visible) {
         const tail = v.missile.localToWorld(tmpV.set(0, 0, 1.9)).clone();
@@ -471,14 +505,18 @@ export class GameRenderer {
 
       // ---- caméra posée sur le décor : suit l'axe de la rue, le missile se balade dans l'image
       const speed01 = clamp((p.speed - 60) / 240, 0, 1);
-      const camZ = z - CAM_BACK;
-      const axis = this.world.pathAt(Math.max(0, camZ));
+      const axisZ = z - (this.views.length > 1 ? CAM_BACK + 5 : CAM_BACK);
+      const axis = this.world.pathAt(Math.max(0, axisZ));
       const ahead = this.world.pathAt(z + 70);
-      // dans les rues larges, la caméra suit un peu plus pour garder le missile à l'écran
-      const followX = clamp(1 - 13 / (this.world.districtDef(z).halfW + 1.5), CAM_FOLLOW_X, 0.6);
+      // la caméra suit juste assez pour que le missile reste dans l'image, même en écran partagé
+      const multi = this.views.length > 1;
+      const camBack = multi ? CAM_BACK + 5 : CAM_BACK;
+      const visHalfW = Math.tan(((v.fov * Math.PI) / 180) / 2) * v.camera.aspect * camBack * 0.7;
+      const maxOff = this.world.districtDef(z).halfW + 1.5;
+      const followX = clamp(1 - visHalfW / maxOff, CAM_FOLLOW_X, 0.9);
       const tx = axis.x + (x - axis.x) * followX;
-      const ty = Math.max(3, axis.y + CAM_UP + (y - axis.y) * CAM_FOLLOW_Y);
-      const k = smooth(p.alive ? 6 : 2);
+      const ty = Math.max(3, axis.y + (multi ? CAM_UP + 1.5 : CAM_UP) + (y - axis.y) * (multi ? 0.5 : CAM_FOLLOW_Y));
+      const k = smooth(p.alive ? 7 : 2);
       v.camX += (tx - v.camX) * k;
       v.camY += (ty - v.camY) * k;
       v.lookX += (ahead.x + (x - ahead.x) * followX - v.lookX) * smooth(4);
@@ -490,7 +528,7 @@ export class GameRenderer {
       const shx = (Math.sin(v.shakeT * 37) + Math.sin(v.shakeT * 61) * 0.5) * sk;
       const shy = (Math.sin(v.shakeT * 43 + 1) + Math.sin(v.shakeT * 71) * 0.5) * sk;
       const cam = v.camera;
-      cam.position.set(v.camX + shx, v.camY + shy, -camZ);
+      cam.position.set(v.camX + shx, v.camY + shy, -(z - camBack));
       cam.up.set(0, 1, 0);
       cam.lookAt(v.lookX, v.lookY, -(z + 70));
       const fovTarget = 60 + speed01 * 14 + (p.boosting ? 6 : 0) - (p.brakeT > 0 ? 4 : 0);

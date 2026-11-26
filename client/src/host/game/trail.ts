@@ -1,4 +1,4 @@
-import { AdditiveBlending, BufferAttribute, BufferGeometry, Camera, Color, Mesh, ShaderMaterial, Vector3 } from 'three';
+import { NormalBlending, BufferAttribute, BufferGeometry, Camera, Color, Mesh, ShaderMaterial, Vector3 } from 'three';
 
 const N = 48; // points du ruban
 const STEP = 0.8; // distance min entre deux points (m)
@@ -26,7 +26,7 @@ export class Trail {
       new ShaderMaterial({
         transparent: true,
         depthWrite: false,
-        blending: AdditiveBlending,
+        blending: NormalBlending,
         uniforms: { uColor: { value: color } },
         vertexShader: /* glsl */ `
           attribute float aAlpha;
@@ -36,7 +36,7 @@ export class Trail {
         fragmentShader: /* glsl */ `
           uniform vec3 uColor;
           varying float vA;
-          void main() { gl_FragColor = vec4(uColor * vA, 1.0); }
+          void main() { gl_FragColor = vec4(uColor, vA * 0.8); }
         `,
       }),
     );

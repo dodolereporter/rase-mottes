@@ -7,8 +7,8 @@ export const ROOM_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ';
 export const RECONNECT_GRACE_MS = 30_000;
 export const MAX_MESSAGE_BYTES = 1024;
 
-export const PLAYER_COLORS = ['#22e8ff', '#ff3ea5', '#ffd23e', '#7dff5a'] as const;
-export const PLAYER_NAMES_COLOR = ['Cyan', 'Magenta', 'Ambre', 'Vert'] as const;
+export const PLAYER_COLORS = ['#ff5a36', '#2f5bff', '#ffb000', '#2fa866'] as const;
+export const PLAYER_NAMES_COLOR = ['Corail', 'Cobalt', 'Soleil', 'Matcha'] as const;
 
 export type GameMode = 'solo' | 'daily' | 'party';
 export const GAME_MODES: GameMode[] = ['solo', 'daily', 'party'];

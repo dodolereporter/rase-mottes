@@ -141,7 +141,7 @@ function vibrate(p: number | number[]) {
 function renderJoin(message = '', bad = false) {
   app.innerHTML = `
     <div class="join">
-      <h1>RASE-MOTTES</h1>
+      <h1>Rase-Mottes</h1>
       <div class="hint">Tiens le téléphone à l'horizontale, à deux mains. Penche-le comme un volant pour tourner, bascule-le vers l'avant pour piquer.</div>
       <div class="row">
         <div class="field"><label for="room">Code du salon</label>
@@ -332,7 +332,9 @@ function onServerMessage(m: ServerToPad | HostToPad) {
         pilot = m.pilot;
         ready = m.ready;
         // calibration automatique au début de chaque manche
+        // calibrage automatique au début de chaque manche : au décompte, puis au « GO »
         if (m.phase === 'countdown' && prev !== 'countdown') recenter();
+        if (m.phase === 'playing' && prev === 'countdown') recenter();
         if (!inGame() && lockAngle !== screenAngle()) {
           lockAngle = screenAngle();
           recenter();

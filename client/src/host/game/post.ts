@@ -102,7 +102,7 @@ const FinalShader = {
       float rad = length(c);
       vec2 dir = rad > 0.0001 ? c / rad : vec2(0.0);
       // aberration chromatique radiale (boost)
-      float ab = fx.y * 0.012 * rad + fx.z * 0.006;
+      float ab = fx.y * 0.004 * rad + fx.z * 0.003;
       vec2 off = normalize(vUv - (rect.xy + rect.zw * vec2(0.5, 0.55)) + 1e-5) * ab;
       vec3 col;
       col.r = texture2D(tDiffuse, vUv + off).r;
@@ -114,14 +114,14 @@ const FinalShader = {
       float h = hash(id);
       float streak = step(0.72, h) * smoothstep(0.32, 0.95, rad);
       float moving = step(0.55, fract(rad * 2.2 - uTime * (2.5 + h * 3.0) * (0.6 + fx.x)));
-      col += vec3(0.75, 0.9, 1.0) * streak * moving * fx.x * 0.12 * (1.0 - abs(fract(ang * 64.0) - 0.5) * 2.0);
+      col += vec3(1.0) * streak * moving * fx.x * 0.08 * (1.0 - abs(fract(ang * 64.0) - 0.5) * 2.0);
       // flash
       col = mix(col, fc.rgb * 2.0, fx.z * 0.5);
       // étalonnage léger + grain
       col *= uGrade;
       col *= 1.0 + (hash(dot(vUv, vec2(12.9898, 78.233)) + uTime) - 0.5) * 0.03;
       // vignette
-      col *= 1.0 - smoothstep(0.6, 1.3, rad) * (0.45 + fx.x * 0.2);
+      col *= 1.0 - smoothstep(0.7, 1.4, rad) * (0.22 + fx.x * 0.12);
       gl_FragColor = vec4(col, 1.0);
     }
   `,
@@ -142,7 +142,7 @@ export class PostFX {
     this.multi = new MultiViewPass(scene);
     this.composer.addPass(this.multi);
     const size = renderer.getSize(new Vector2());
-    this.bloom = new UnrealBloomPass(new Vector2(size.x / 2, size.y / 2), 0.55, 0.45, 1.0);
+    this.bloom = new UnrealBloomPass(new Vector2(size.x / 2, size.y / 2), 0.28, 0.5, 1.1);
     this.composer.addPass(this.bloom);
     this.final = new ShaderPass(FinalShader);
     this.composer.addPass(this.final);

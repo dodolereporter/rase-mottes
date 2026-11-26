@@ -4,10 +4,10 @@ const NOTE = (n: number) => 440 * Math.pow(2, (n - 69) / 12);
 
 // Progression en la mineur : Am F C G (racines MIDI)
 const CHORDS = [
-  [57, 60, 64],
-  [53, 57, 60],
-  [48, 52, 55],
-  [55, 59, 62],
+  [53, 57, 60, 64],
+  [52, 55, 59, 62],
+  [50, 53, 57, 60],
+  [48, 52, 55, 59],
 ];
 const ARP = [0, 1, 2, 1, 0, 2, 1, 2];
 
@@ -56,7 +56,7 @@ export class AudioEngine {
     this.sfx = ctx.createGain();
     this.sfx.connect(this.master);
     this.music = ctx.createGain();
-    this.music.gain.value = 0.32;
+    this.music.gain.value = 0.38;
     this.musicFilter = ctx.createBiquadFilter();
     this.musicFilter.type = 'lowpass';
     this.musicFilter.frequency.value = 900;
@@ -125,7 +125,7 @@ export class AudioEngine {
 
   private scheduleMusic() {
     const ctx = this.ctx!;
-    const bpm = 108 + this.intensity * 24;
+    const bpm = 96 + this.intensity * 22;
     const step = 60 / bpm / 4; // doubles croches
     while (this.nextBeat < ctx.currentTime + 0.12) {
       this.playStep(this.beat, this.nextBeat, step);
@@ -142,14 +142,14 @@ export class AudioEngine {
     // basse à chaque croche
     if (s % 2 === 0) this.bass(NOTE(chord[0] - 24 + (s % 8 === 6 ? 12 : 0)), t, step * 1.8);
     // nappe au début de chaque mesure
-    if (s === 0) for (const n of chord) this.pad(NOTE(n), t, step * 16);
+    if (s === 0 || s === 6 || s === 10) for (const n of chord) this.pad(NOTE(n), t, step * (s === 0 ? 6 : 3));
     // batterie selon l'intensité
     if (lvl > 0.12 && s % 4 === 0) this.kick(t);
     if (lvl > 0.35 && (s === 4 || s === 12)) this.snare(t);
     if (lvl > 0.25 && s % 2 === 1) this.hat(t, 0.25 + lvl * 0.3);
     // arpège lead
-    if (lvl > 0.55) {
-      const n = chord[ARP[s % 8]] + 12 + (s >= 8 ? 12 : 0);
+    if (lvl > 0.5 && s % 2 === 0) {
+      const n = chord[ARP[s % 8] % chord.length] + 12;
       this.lead(NOTE(n), t, step * 0.9);
     }
   }
@@ -163,12 +163,12 @@ export class AudioEngine {
   private bass(f: number, t: number, dur: number) {
     const ctx = this.ctx!;
     const o = ctx.createOscillator();
-    o.type = 'sawtooth';
+    o.type = 'triangle';
     o.frequency.value = f;
     const fl = ctx.createBiquadFilter();
     fl.type = 'lowpass';
-    fl.frequency.setValueAtTime(900, t);
-    fl.frequency.exponentialRampToValueAtTime(180, t + dur);
+    fl.frequency.setValueAtTime(600, t);
+    fl.frequency.exponentialRampToValueAtTime(160, t + dur);
     const g = ctx.createGain();
     this.env(g, t, 0.005, 0.35, dur);
     o.connect(fl).connect(g).connect(this.music);
@@ -180,11 +180,11 @@ export class AudioEngine {
     const ctx = this.ctx!;
     const g = ctx.createGain();
     g.gain.setValueAtTime(0.0001, t);
-    g.gain.exponentialRampToValueAtTime(0.06, t + dur * 0.3);
+    g.gain.exponentialRampToValueAtTime(0.05, t + 0.02);
     g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-    for (const det of [-9, 9]) {
+    for (const det of [-5, 5]) {
       const o = ctx.createOscillator();
-      o.type = 'sawtooth';
+      o.type = 'triangle';
       o.frequency.value = f;
       o.detune.value = det;
       o.connect(g);
@@ -197,10 +197,10 @@ export class AudioEngine {
   private lead(f: number, t: number, dur: number) {
     const ctx = this.ctx!;
     const o = ctx.createOscillator();
-    o.type = 'square';
+    o.type = 'sine';
     o.frequency.value = f;
     const g = ctx.createGain();
-    this.env(g, t, 0.004, 0.06, dur);
+    this.env(g, t, 0.004, 0.08, dur * 1.6);
     o.connect(g).connect(this.music);
     o.start(t);
     o.stop(t + dur + 0.05);

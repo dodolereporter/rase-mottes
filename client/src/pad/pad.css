@@ -1,12 +1,13 @@
 :root {
-  --bg: #05040c;
-  --fg: #eef3ff;
-  --dim: #8a90b8;
-  --accent: #22e8ff;
-  --warn: #ffb02e;
-  --bad: #ff4d6d;
-  --panel: rgba(18, 16, 40, 0.92);
-  color-scheme: dark;
+  --bg: #f4efe8;
+  --fg: #12151d;
+  --dim: #6c707b;
+  --line: rgba(18, 21, 29, 0.12);
+  --accent: #ff5a36;
+  --warn: #c97a00;
+  --bad: #d93a24;
+  --panel: rgba(250, 247, 243, 0.97);
+  color-scheme: light;
 }
 * {
   box-sizing: border-box;
@@ -18,7 +19,8 @@ body {
   height: 100%;
   background: var(--bg);
   color: var(--fg);
-  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-family: ui-sans-serif, -apple-system, 'SF Pro Text', 'Inter', system-ui, Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
   overflow: hidden;
   overscroll-behavior: none;
   touch-action: none;
@@ -33,29 +35,32 @@ body {
 }
 button {
   font: inherit;
-  color: inherit;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  background: rgba(255, 255, 255, 0.07);
-  border-radius: 12px;
+  font-weight: 600;
+  color: var(--fg);
+  border: 1px solid var(--line);
+  background: #fff;
+  border-radius: 14px;
   padding: 10px 14px;
   touch-action: manipulation;
+  box-shadow: 0 2px 8px rgba(30, 24, 16, 0.06);
 }
 button:active {
   transform: scale(0.97);
 }
 button.primary {
-  background: var(--accent);
-  color: #001018;
+  background: var(--fg);
+  color: #fff;
   border: none;
   font-weight: 800;
 }
-input {
+input,
+select {
   font: inherit;
   font-size: 18px;
   color: var(--fg);
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  border-radius: 10px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 12px;
   padding: 10px 12px;
   width: 100%;
   user-select: text;
@@ -78,13 +83,13 @@ input {
 }
 .join h1 {
   margin: 0;
-  font-size: 30px;
-  letter-spacing: 0.06em;
-  font-style: italic;
-  background: linear-gradient(90deg, #22e8ff, #ff3ea5);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
+  font-size: 34px;
+  font-weight: 850;
+  letter-spacing: -0.04em;
+}
+.join h1::after {
+  content: '.';
+  color: var(--accent);
 }
 .join .row {
   display: flex;
@@ -92,11 +97,14 @@ input {
   width: min(420px, 100%);
 }
 .join label {
-  font-size: 13px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
   color: var(--dim);
   text-align: left;
   display: block;
-  margin-bottom: 4px;
+  margin-bottom: 6px;
 }
 .join .field {
   flex: 1;
@@ -104,7 +112,8 @@ input {
 .join .go {
   width: min(420px, 100%);
   padding: 16px;
-  font-size: 19px;
+  font-size: 18px;
+  border-radius: 16px;
 }
 .msg {
   min-height: 1.2em;
@@ -115,10 +124,15 @@ input {
 .msg.bad {
   color: var(--bad);
 }
+.msg a,
+.hint a {
+  color: var(--accent);
+}
 .hint {
   color: var(--dim);
   font-size: 13px;
   max-width: 420px;
+  line-height: 1.45;
 }
 
 /* ---- manette ---- */
@@ -133,8 +147,8 @@ input {
   align-items: center;
   gap: 8px;
   padding: 8px 10px;
-  background: rgba(255, 255, 255, 0.04);
-  border-bottom: 3px solid var(--player, var(--accent));
+  background: #fff;
+  border-bottom: 1px solid var(--line);
   font-size: 14px;
   z-index: 3;
 }
@@ -143,10 +157,9 @@ input {
   height: 14px;
   border-radius: 50%;
   background: var(--player, var(--accent));
-  box-shadow: 0 0 12px var(--player, var(--accent));
 }
 .bar .name {
-  font-weight: 700;
+  font-weight: 800;
 }
 .bar .status {
   flex: 1;
@@ -162,7 +175,7 @@ input {
   text-align: right;
 }
 .bar .ping.warn {
-  color: var(--warn);
+  color: var(--bad);
   font-weight: 700;
 }
 .bar button {
@@ -173,22 +186,23 @@ input {
   position: relative;
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 8px;
-  padding: 8px;
+  gap: 10px;
+  padding: 10px;
 }
 .zone {
-  border-radius: 18px;
+  border-radius: 22px;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 8px;
-  font-weight: 900;
-  font-size: 26px;
-  letter-spacing: 0.12em;
-  border: 2px solid rgba(255, 255, 255, 0.12);
-  background: rgba(255, 255, 255, 0.04);
-  transition: background 0.05s;
+  font-weight: 850;
+  font-size: 24px;
+  letter-spacing: 0.14em;
+  border: 1px solid var(--line);
+  background: #fff;
+  box-shadow: 0 4px 18px rgba(30, 24, 16, 0.06);
+  transition: background 0.06s, color 0.06s;
   position: relative;
   overflow: hidden;
 }
@@ -196,47 +210,53 @@ input {
   font-size: 12px;
   font-weight: 500;
   color: var(--dim);
-  letter-spacing: 0.04em;
+  letter-spacing: 0.02em;
 }
 .zone.boost.on {
-  background: rgba(34, 232, 255, 0.28);
-  border-color: var(--accent);
+  background: var(--player, var(--accent));
+  color: #fff;
+}
+.zone.boost.on small {
+  color: rgba(255, 255, 255, 0.8);
 }
 .zone.brake.on {
-  background: rgba(255, 77, 109, 0.28);
-  border-color: var(--bad);
+  background: var(--fg);
+  color: #fff;
 }
 .gauge {
   position: absolute;
-  left: 0;
-  bottom: 0;
-  height: 10px;
-  width: 100%;
-  background: rgba(255, 255, 255, 0.08);
+  left: 16px;
+  right: 16px;
+  bottom: 14px;
+  height: 8px;
+  border-radius: 6px;
+  background: rgba(18, 21, 29, 0.08);
+  overflow: hidden;
 }
 .gauge > div {
   height: 100%;
   width: 50%;
-  background: linear-gradient(90deg, #22e8ff, #9b5cff);
-  box-shadow: 0 0 12px #22e8ff;
+  border-radius: 6px;
+  background: var(--player, var(--accent));
 }
 .tilt {
   position: absolute;
   left: 50%;
   top: 50%;
-  width: 64px;
-  height: 64px;
-  margin: -32px 0 0 -32px;
+  width: 70px;
+  height: 70px;
+  margin: -35px 0 0 -35px;
   border-radius: 50%;
-  border: 1px solid rgba(255, 255, 255, 0.2);
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.85);
   pointer-events: none;
 }
 .tilt > div {
   position: absolute;
-  width: 14px;
-  height: 14px;
-  left: 25px;
-  top: 25px;
+  width: 16px;
+  height: 16px;
+  left: 27px;
+  top: 27px;
   border-radius: 50%;
   background: var(--player, var(--accent));
 }
@@ -250,8 +270,9 @@ input {
   grid-row: span 2;
 }
 .stick {
-  border-radius: 18px;
-  border: 2px dashed rgba(255, 255, 255, 0.2);
+  border-radius: 22px;
+  border: 1px dashed var(--line);
+  background: rgba(255, 255, 255, 0.6);
   position: relative;
 }
 .stick .knob {
@@ -263,7 +284,6 @@ input {
   top: 50%;
   border-radius: 50%;
   background: var(--player, var(--accent));
-  opacity: 0.85;
   pointer-events: none;
 }
 
@@ -287,7 +307,9 @@ input {
 }
 .menu h2 {
   margin: 0;
-  font-size: 22px;
+  font-size: 24px;
+  font-weight: 850;
+  letter-spacing: -0.03em;
 }
 .menu .modes {
   display: flex;
@@ -296,22 +318,26 @@ input {
   justify-content: center;
 }
 .menu .modes button.sel {
-  border-color: var(--player, var(--accent));
-  background: rgba(34, 232, 255, 0.18);
-  font-weight: 700;
+  background: var(--fg);
+  color: #fff;
+  border-color: var(--fg);
 }
 .menu .big {
-  font-size: 22px;
+  font-size: 20px;
   padding: 16px 34px;
   min-width: 220px;
+  border-radius: 18px;
 }
 .menu .result {
-  font-size: 18px;
+  font-size: 16px;
   text-align: center;
+  color: var(--dim);
 }
 .menu .result b {
-  font-size: 28px;
+  font-size: 30px;
   display: block;
+  color: var(--fg);
+  letter-spacing: -0.03em;
 }
 .menu .namerow {
   display: flex;
@@ -344,10 +370,12 @@ input {
 .settings input[type='range'] {
   grid-column: span 2;
   padding: 0;
+  accent-color: var(--accent);
 }
 .settings input[type='checkbox'] {
   width: 26px;
   height: 26px;
+  accent-color: var(--accent);
 }
 .overlay-warn {
   position: absolute;
@@ -355,12 +383,12 @@ input {
   top: 56px;
   transform: translateX(-50%);
   z-index: 6;
-  background: rgba(255, 176, 46, 0.95);
-  color: #1a1000;
-  padding: 6px 12px;
-  border-radius: 10px;
+  background: var(--fg);
+  color: #fff;
+  padding: 6px 14px;
+  border-radius: 999px;
   font-weight: 700;
-  font-size: 14px;
+  font-size: 13px;
   pointer-events: none;
 }
 .overlay-warn[hidden] {

@@ -1,5 +1,6 @@
 import {
   AdditiveBlending,
+  BackSide,
   BoxGeometry,
   Color,
   ConeGeometry,
@@ -32,14 +33,22 @@ export function createMissile(color: string, ghost = false): Group {
   const g = new Group();
   const c = new Color(color);
   const ghostMat = new MeshBasicMaterial({ color: c, transparent: true, opacity: 0.3, depthWrite: false });
-  const hull = ghost ? ghostMat : new MeshStandardMaterial({ color: '#e9edf3', metalness: 0.75, roughness: 0.25 });
-  const paint = ghost ? ghostMat : new MeshStandardMaterial({ color: c, metalness: 0.4, roughness: 0.35, emissive: c, emissiveIntensity: 0.6 });
+  const hull = ghost ? ghostMat : new MeshStandardMaterial({ color: c, metalness: 0.15, roughness: 0.35, emissive: c, emissiveIntensity: 0.6 });
+  const paint = ghost ? ghostMat : new MeshStandardMaterial({ color: '#ffffff', metalness: 0.1, roughness: 0.3, emissive: '#ffffff', emissiveIntensity: 0.25 });
   const dark = ghost ? ghostMat : new MeshStandardMaterial({ color: '#23262e', metalness: 0.85, roughness: 0.35 });
 
-  const body = new Mesh(new LatheGeometry(bodyProfile(), 28), hull);
+  const bodyGeo = new LatheGeometry(bodyProfile(), 28);
+  const body = new Mesh(bodyGeo, hull);
   body.rotation.x = -Math.PI / 2; // l'axe y du profil devient -z
   body.castShadow = !ghost;
   g.add(body);
+  if (!ghost) {
+    // contour encre (coque inversée) : la fusée se détache toujours du décor clair
+    const outline = new Mesh(bodyGeo, new MeshBasicMaterial({ color: '#0d1018', side: BackSide, fog: false }));
+    outline.rotation.x = -Math.PI / 2;
+    outline.scale.setScalar(1.09);
+    g.add(outline);
+  }
   // bandes de couleur du joueur
   for (const zz of [-0.55, 0.9]) {
     const band = new Mesh(new CylinderGeometry(0.352, 0.352, zz < 0 ? 0.28 : 0.14, 28), paint);

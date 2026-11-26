@@ -2,6 +2,8 @@
 
 import {
   BoxGeometry,
+  BufferGeometry,
+  MeshStandardMaterial,
   Color,
   DynamicDrawUsage,
   Group,
@@ -16,9 +18,10 @@ import {
   Vector3,
 } from 'three';
 import { Box } from '../../../../shared/collision';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { Chunk, Collider, World, moverOffset, rotorAngle } from '../../../../shared/world';
 import { Rng, hash2 } from '../../../../shared/prng';
-import { createGlowMaterial, createStructureMaterial } from './materials';
+import { createStructureMaterial } from './materials';
 import { ATMOS, KIND_CODE } from './atmosphere';
 
 const STATIC_CAP = 1100;
@@ -27,7 +30,21 @@ const RING_CAP = 40;
 const PICKUP_CAP = 8;
 
 const boxGeo = new BoxGeometry(1, 1, 1);
-const ringGeo = new TorusGeometry(3.2, 0.22, 8, 40);
+const PALM_CAP = 40;
+/** Couronne de palmier : palmes fines qui retombent (géométrie fusionnée). */
+const palmCrownGeo = (() => {
+  const parts: BufferGeometry[] = [];
+  for (let i = 0; i < 9; i++) {
+    const g = new BoxGeometry(0.5, 0.06, 3.6);
+    g.translate(0, 0, 1.8);
+    g.rotateX(0.35 + (i % 2) * 0.25);
+    g.rotateY((i / 9) * Math.PI * 2);
+    parts.push(g);
+  }
+  return mergeGeometries(parts)!;
+})();
+const palmMat = new MeshStandardMaterial({ color: '#7f9e72', roughness: 0.85 });
+const ringGeo = new TorusGeometry(3.2, 0.26, 12, 48);
 const pickupGeo = new OctahedronGeometry(1.4, 0);
 
 const m4 = new Matrix4();
@@ -36,9 +53,10 @@ const v = new Vector3();
 const s = new Vector3();
 const tmpColor = new Color();
 const zAxis = new Vector3(0, 0, 1);
+const yAxis = new Vector3(0, 1, 0);
 
 const TINTS = ['#2b2d38', '#3a2c2a', '#1d2a3a', '#2f2440', '#283230'].map((h) => new Color(h));
-const CONTAINER_COLORS = ['#7a2a1e', '#1e4a7a', '#2a6a3a', '#7a6a1e', '#5a5a64', '#7a3a5a'].map((h) => new Color(h));
+const CONTAINER_COLORS = ['#233a5e', '#2f5a45', '#6b2e35', '#3a3f47', '#8a6a2e', '#1f4c5a'].map((h) => new Color(h));
 
 /** Conversion repère du jeu (z avant) -> repère three (z vers la caméra). */
 export function setBoxMatrix(mat: Matrix4, b: Box, offX = 0, offY = 0) {
@@ -73,8 +91,9 @@ class ChunkView {
   chunk: Chunk | null = null;
   moverList: Collider[] = [];
   rotorList: Collider[] = [];
+  palms: InstancedMesh;
 
-  constructor(material: Material, ringMat: ShaderMaterial, pickupMats: ShaderMaterial[], public world: World) {
+  constructor(material: Material, ringMat: Material, pickupMats: Material[], public world: World) {
     this.statics = makeInstanced(STATIC_CAP, material, false);
     this.movers = makeInstanced(MOVER_CAP, material, true);
     this.rings = new InstancedMesh(ringGeo, ringMat, RING_CAP);
@@ -88,7 +107,11 @@ class ChunkView {
       im.instanceMatrix.setUsage(DynamicDrawUsage);
       return im;
     });
-    this.group.add(this.statics, this.movers, this.rings, ...this.pickups);
+    this.palms = new InstancedMesh(palmCrownGeo, palmMat, PALM_CAP);
+    this.palms.count = 0;
+    this.palms.frustumCulled = false;
+    this.palms.castShadow = true;
+    this.group.add(this.statics, this.movers, this.rings, this.palms, ...this.pickups);
   }
 
   assign(chunk: Chunk) {
@@ -183,6 +206,32 @@ class ChunkView {
       }
     };
     for (const c of chunk.colliders) if (c.kind === 'wall') dressing(c.box, true);
+    // palmiers dans les rues transversales (hors du couloir de vol)
+    let np = 0;
+    const walls = chunk.colliders.filter((c) => c.kind === 'wall').map((c) => c.box);
+    for (const side of [-1, 1]) {
+      const list = walls
+        .filter((b) => ((b.minX + b.maxX) / 2 < this.world.pathAt((b.minZ + b.maxZ) / 2).x ? -1 : 1) === side)
+        .sort((a, b) => a.minZ - b.minZ);
+      for (let i = 0; i + 1 < list.length && np < PALM_CAP; i++) {
+        const gap = list[i + 1].minZ - list[i].maxZ;
+        if (gap < 6 || list[i].maxY < 8) continue;
+        const face = side < 0 ? list[i].maxX : list[i].minX;
+        for (const dz of [2.5, gap - 2.5]) {
+          const pz = list[i].maxZ + dz;
+          const px = face - side * 2.8;
+          const ph = rng.range(9, 13);
+          put({ minX: px - 0.22, maxX: px + 0.22, minZ: pz - 0.22, maxZ: pz + 0.22, minY: 0, maxY: ph }, 'palm', 0.5);
+          v.set(px, ph, -pz);
+          q.setFromAxisAngle(yAxis, rng.range(0, 6.28));
+          s.setScalar(rng.range(0.9, 1.15));
+          m4.compose(v, q, s);
+          this.palms.setMatrixAt(np++, m4);
+        }
+      }
+    }
+    this.palms.count = np;
+    this.palms.instanceMatrix.needsUpdate = true;
     for (const b of chunk.decor) dressing(b, false);
     this.statics.count = n;
     this.statics.instanceMatrix.needsUpdate = true;
@@ -261,11 +310,11 @@ class ChunkView {
 export class CityRenderer {
   readonly group = new Group();
   readonly material = createStructureMaterial();
-  private ringMat = createGlowMaterial(new Color('#ffe14d'));
+  private ringMat = new MeshStandardMaterial({ color: '#ffc23a', emissive: '#ffae00', emissiveIntensity: 0.7, metalness: 0.5, roughness: 0.3 });
   private pickupMats = [
-    createGlowMaterial(new Color('#4dd2ff')),
-    createGlowMaterial(new Color('#c86bff')),
-    createGlowMaterial(new Color('#ff6b4d')),
+    new MeshStandardMaterial({ color: '#5ab8ff', emissive: '#2f8fff', emissiveIntensity: 0.8, roughness: 0.3 }),
+    new MeshStandardMaterial({ color: '#b48cff', emissive: '#8a5cff', emissiveIntensity: 0.8, roughness: 0.3 }),
+    new MeshStandardMaterial({ color: '#ff8a6a', emissive: '#ff5a36', emissiveIntensity: 0.8, roughness: 0.3 }),
   ];
   private pool: ChunkView[] = [];
   private active = new Map<number, ChunkView>();

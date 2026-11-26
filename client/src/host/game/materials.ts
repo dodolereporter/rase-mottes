@@ -55,26 +55,28 @@ const STRUCT_PROC = /* glsl */ `
   float edgeDist = min(dE.x, min(dE.y, dE.z));
   float pxw = max(length(fwidth(vWPos)), 1e-3);
   float edge = 1.0 - smoothstep(0.06, 0.06 + pxw * 1.5, edgeDist);
+  float bevel = 1.0 - smoothstep(0.0, 0.22 + pxw, edgeDist);
   float rnd = vStyle.y;
   vec2 fc = abs(on.x) > 0.5 ? vWPos.zy : (abs(on.z) > 0.5 ? vWPos.xy : vWPos.xz);
-  float grime = vnoise(fc * 0.35) * 0.5 + vnoise(fc * 2.3) * 0.25 + 0.25;
+  float grain = vnoise(fc * 1.7) * 0.5 + vnoise(fc * 9.0) * 0.5;
   vec3 alb = vColor;
-  float pRough = 0.8;
+  float pRough = 0.9;
   float pMetal = 0.0;
   vec3 pEmis = vec3(0.0);
-  vec3 neon = mix(uNeonA, uNeonB, step(0.5, fract(rnd * 3.7)));
-  vec3 hazard = vec3(0.95, 0.62, 0.05);
+  // encre (obstacles) et corail (signal) : les deux seules couleurs fortes du décor
+  vec3 INK = vec3(0.085, 0.1, 0.14);
+  vec3 CORAL = uNeonA;
 
   if (kind == 0) {
-    // ---------------- immeubles ----------------
+    // ---------------- immeubles : matière mate, couleurs pastel ----------------
     float bt = fract(rnd * 7.13);
     float bid = floor(rnd * 997.0);
-    float isGlass = step(0.35, bt) * step(bt, 0.62);
-    alb = vColor * (0.78 + 0.35 * grime);
-    pRough = 0.88;
+    float isGlass = step(0.4, bt) * step(bt, 0.62);
+    alb = vColor * (0.96 + 0.06 * grain);
+    pRough = 0.92;
     if (abs(on.y) < 0.5) {
-      vec2 cs = bt < 0.35 ? vec2(2.4, 3.5) : bt < 0.62 ? vec2(3.3, 3.7) : bt < 0.85 ? vec2(1.9, 3.1) : vec2(7.5, 3.9);
-      vec2 fill = bt < 0.35 ? vec2(0.6, 0.56) : bt < 0.62 ? vec2(0.94, 0.88) : bt < 0.85 ? vec2(0.5, 0.52) : vec2(0.97, 0.44);
+      vec2 cs = bt < 0.4 ? vec2(2.6, 3.6) : bt < 0.62 ? vec2(3.4, 3.8) : bt < 0.85 ? vec2(2.0, 3.2) : vec2(8.0, 3.9);
+      vec2 fill = bt < 0.4 ? vec2(0.56, 0.52) : bt < 0.62 ? vec2(0.95, 0.9) : bt < 0.85 ? vec2(0.46, 0.5) : vec2(0.96, 0.42);
       vec2 uv = vec2(fc.x, vWPos.y - 0.4) / cs;
       vec2 cell = floor(uv);
       vec2 f = fract(uv) - 0.5;
@@ -84,146 +86,139 @@ const STRUCT_PROC = /* glsl */ `
       float win = wx * wy;
       float far = smoothstep(0.25, 0.8, max(fw.x, fw.y));
       win = mix(win, fill.x * fill.y, far);
-      float slab = 1.0 - smoothstep(0.0, 0.07 + fw.y, abs(f.y + 0.5));
-      alb *= 1.0 + slab * 0.3 * (1.0 - far);
+      // vitrage : bleu-gris doux, légèrement réfléchissant
       float hWin = hash12(cell + bid * 0.37);
-      vec3 paneAlb = isGlass > 0.5 ? mix(vec3(0.32, 0.4, 0.5), vColor, 0.25) : vec3(0.09, 0.1, 0.12);
-      float paneRough = 0.12 + 0.2 * hash12(cell * 0.71 + bid);
-      float paneMetal = isGlass > 0.5 ? 1.0 : 0.75;
-      float hFloor = hash12(vec2(cell.y, bid));
-      float litRate = (0.18 + 0.45 * fract(rnd * 3.7));
-      float lit = isGlass > 0.5 ? step(1.0 - litRate, hFloor) * step(0.12, hWin) : step(1.0 - litRate, hWin);
-      lit = mix(lit, litRate, far) * uNight;
-      vec3 wc = hWin > 0.92 ? vec3(0.65, 0.85, 1.0) : hWin > 0.86 ? neon : uWindow;
-      float blinds = 0.82 + 0.18 * step(0.5, fract(uv.y * 9.0));
-      float inner = 0.55 + 0.45 * smoothstep(-0.5, 0.5, f.y);
-      float tv = hWin > 0.985 ? 0.6 + 0.4 * sin(uTime * 9.0 + bid) : 1.0;
-      vec3 paneEm = wc * lit * (0.7 + 1.1 * hash12(cell * 1.7)) * blinds * inner * tv;
-      alb = mix(alb, paneAlb * (1.0 - lit * 0.7), win);
-      pRough = mix(pRough, paneRough, win);
-      pMetal = mix(pMetal, paneMetal * (1.0 - lit * 0.6), win);
-      pEmis += paneEm * win;
-      if (vWPos.y < 4.6) {
+      vec3 pane = isGlass > 0.5 ? vec3(0.62, 0.72, 0.8) : mix(vec3(0.42, 0.48, 0.55), vColor * 0.6, 0.35);
+      pane *= 0.92 + 0.12 * hWin;
+      // stores clairs sur certaines fenêtres
+      float blind = step(0.78, hWin) * step(f.y, 0.1);
+      pane = mix(pane, vec3(0.95, 0.93, 0.9), blind);
+      alb = mix(alb, pane, win);
+      pRough = mix(pRough, isGlass > 0.5 ? 0.12 : 0.3, win);
+      pMetal = mix(pMetal, isGlass > 0.5 ? 0.55 : 0.15, win);
+      // bandeau d'étage clair (balcons)
+      float slab = 1.0 - smoothstep(0.0, 0.06 + fw.y, abs(f.y + 0.5));
+      alb = mix(alb, vec3(0.98, 0.97, 0.95), slab * 0.5 * (1.0 - far) * step(bt, 0.85));
+      // rez-de-chaussée : vitrines et auvents rayés pastel
+      if (vWPos.y < 4.8) {
         float seg = floor(fc.x / 9.0);
         float sf = fract(fc.x / 9.0);
-        float shopOn = step(0.3, hash12(vec2(seg, bid)));
-        vec3 shopCol = mix(mix(uNeonA, uNeonB, hash12(vec2(seg * 1.3, bid))), uWindow, 0.55);
-        float shopWin = step(0.07, sf) * step(sf, 0.93) * step(0.35, vWPos.y) * step(vWPos.y, 3.7);
-        alb = mix(alb * 0.6, vec3(0.06), shopWin);
-        pRough = mix(pRough, 0.08, shopWin);
-        pMetal = mix(pMetal, 0.5, shopWin);
-        pEmis += shopCol * shopWin * shopOn * (0.5 + 1.8 * uNight);
-        float awn = 1.0 - smoothstep(0.0, 0.15 + fw.y, abs(vWPos.y - 4.2));
-        pEmis += mix(uNeonA, uNeonB, hash12(vec2(seg, bid + 3.0))) * awn * shopOn * (0.6 + 2.0 * uNight);
+        float h = hash12(vec2(seg, bid));
+        float shopWin = step(0.06, sf) * step(sf, 0.94) * step(0.3, vWPos.y) * step(vWPos.y, 3.7);
+        alb = mix(alb, vec3(0.38, 0.47, 0.5), shopWin);
+        pRough = mix(pRough, 0.1, shopWin);
+        pMetal = mix(pMetal, 0.4, shopWin);
+        pEmis += vec3(1.0, 0.92, 0.8) * shopWin * 0.12;
+        vec3 awnCol = h < 0.33 ? vec3(0.62, 0.74, 0.58) : h < 0.66 ? vec3(0.95, 0.72, 0.64) : vec3(0.97, 0.94, 0.88);
+        float awn = step(3.8, vWPos.y) * step(vWPos.y, 4.6);
+        float stripes = step(0.5, fract(fc.x * 1.2));
+        alb = mix(alb, mix(awnCol, vec3(0.98), stripes * 0.6), awn);
       }
-      float dh = abs(on.x) > 0.5 ? dE.z : dE.x;
-      float corner = (1.0 - smoothstep(0.08, 0.25, dh)) * step(0.7, fract(rnd * 11.3));
-      pEmis += neon * corner * (0.4 + 2.5 * uNight);
     } else if (on.y > 0.5) {
-      vec2 rg = abs(fract(vWPos.xz / 3.0) - 0.5);
-      alb = vColor * 0.42 * (0.8 + 0.4 * grime) * (0.9 + 0.1 * step(0.46, max(rg.x, rg.y)));
+      alb = vColor * 0.86;
       pRough = 0.95;
     }
-    float topD = (0.5 - vLocal.y) * vSize.y;
-    float trim = (1.0 - smoothstep(0.0, 0.35, topD)) * step(abs(on.y), 0.5);
-    alb = mix(alb, vec3(0.7), trim * 0.5);
-    pEmis += neon * trim * step(0.4, vStyle.z) * 3.0 * uNight;
-    alb *= 0.45 + 0.55 * smoothstep(0.0, 9.0, vWPos.y);
+    // biseau clair sur les arêtes : rendu « maquette »
+    alb = mix(alb, min(alb * 1.12 + 0.03, vec3(1.0)), bevel);
+    // occlusion douce au pied
+    alb *= 0.78 + 0.22 * smoothstep(0.0, 7.0, vWPos.y);
   } else if (kind == 1) {
-    alb = vec3(0.32) * (0.8 + 0.4 * grime);
-    pRough = 0.9;
-    float strip = step(0.9, fract(vWPos.z / 12.0)) * step(abs(fract(vWPos.x / 6.0) - 0.5), 0.12);
-    pEmis += uWindow * strip * 4.0;
-  } else if (kind == 2 || kind == 14) {
-    bool concrete = kind == 14;
-    alb = concrete ? vec3(0.52, 0.5, 0.48) * (0.75 + 0.45 * grime) : vec3(0.3, 0.32, 0.35) * (0.75 + 0.5 * grime);
-    pRough = concrete ? 0.9 : 0.42;
-    pMetal = concrete ? 0.0 : 0.85;
-    vec2 pg = abs(fract(fc / 2.0) - 0.5);
-    alb *= 0.9 + 0.1 * step(0.47, max(pg.x, pg.y));
-    float band = 1.0 - smoothstep(0.25, 0.25 + pxw * 2.0, edgeDist);
-    alb = mix(alb, hazard, band * (concrete ? 0.0 : 0.85));
-    if (concrete) {
-      float stripes = step(0.5, fract((fc.x + fc.y) * 0.5));
-      alb = mix(alb, mix(vec3(0.05), hazard, stripes), step(vWPos.y, 2.0));
-    }
-    pEmis += neon * edge * (0.3 + 1.5 * uNight);
-  } else if (kind == 3) {
-    alb = vec3(0.12, 0.13, 0.15) * (0.8 + 0.4 * grime);
-    pRough = 0.35;
-    pMetal = 0.8;
-    vec3 g3 = abs(fract(vLocal * 3.0) - 0.5);
-    float seam = 1.0 - smoothstep(0.43, 0.48, max(max(g3.x * (1.0 - abs(on.x)), g3.y * (1.0 - abs(on.y))), g3.z * (1.0 - abs(on.z))));
-    pEmis += uNeonA * (seam * 0.15 + edge * 1.4) * (0.8 + 0.2 * sin(uTime * 3.0 + rnd * 20.0));
-  } else if (kind == 4) {
-    float rib = step(0.5, fract(fc.x * 1.6));
-    alb = vColor * (0.75 + 0.2 * rib) * (0.8 + 0.35 * grime);
-    alb = mix(alb, vec3(0.32, 0.18, 0.1), smoothstep(0.65, 0.95, grime) * 0.5);
+    // plafond du tunnel : panneaux blancs et rampes lumineuses
+    vec2 pg = abs(fract(fc / vec2(3.0, 3.0)) - 0.5);
+    alb = vec3(0.93, 0.95, 0.92) * (1.0 - step(0.47, max(pg.x, pg.y)) * 0.08);
     pRough = 0.6;
-    pMetal = 0.45;
-  } else if (kind == 5) {
-    alb = vec3(0.08);
-    pRough = 0.3;
-    pMetal = 0.8;
-    float eye = step(length(vLocal.xy), 0.22) * step(0.4, abs(vLocal.z));
-    pEmis += vec3(1.0, 0.6, 0.1) * (edge * 2.0 + eye * 6.0) * (0.6 + 0.4 * sin(uTime * 10.0 + rnd * 30.0));
-  } else if (kind == 6) {
-    alb = vec3(0.86, 0.87, 0.9);
-    pRough = 0.3;
+    float strip = step(0.88, fract(vWPos.z / 10.0)) * step(abs(fract(vWPos.x / 6.0) - 0.5), 0.14);
+    pEmis += vec3(1.0, 0.98, 0.94) * strip * 2.2;
+  } else if (kind == 2 || kind == 14 || kind == 3) {
+    // obstacles : encre satinée, biseaux lumineux, liseré corail
+    alb = INK * (0.9 + 0.2 * grain);
+    pRough = 0.42;
     pMetal = 0.25;
+    alb = mix(alb, INK * 2.6, bevel * 0.8);
+    float rimC = 1.0 - smoothstep(0.1, 0.1 + pxw * 1.5, edgeDist);
+    alb = mix(alb, CORAL, rimC * 0.9);
+    pEmis += CORAL * rimC * 0.35;
+    if (kind == 14) {
+      // colonne : bague corail à hauteur de vol
+      float ring = step(abs(fract(vWPos.y / 9.0) - 0.5), 0.04);
+      alb = mix(alb, CORAL, ring);
+      pEmis += CORAL * ring * 0.3;
+    }
+  } else if (kind == 4) {
+    // conteneurs : teintes profondes et nervures (lisibles comme obstacles)
+    float rib = step(0.5, fract(fc.x * 1.6));
+    alb = vColor * (0.85 + 0.15 * rib) * (0.92 + 0.12 * grain);
+    pRough = 0.55;
+    pMetal = 0.35;
+    alb = mix(alb, alb * 1.8, bevel * 0.6);
+  } else if (kind == 5) {
+    alb = INK;
+    pRough = 0.3;
+    pMetal = 0.6;
+    float eye = step(length(vLocal.xy), 0.22) * step(0.4, abs(vLocal.z));
+    pEmis += CORAL * (edge * 0.8 + eye * 3.0) * (0.6 + 0.4 * sin(uTime * 10.0 + rnd * 30.0));
+  } else if (kind == 6) {
+    // train : blanc, bandeau vitré encre, liseré corail
+    alb = vec3(0.95, 0.95, 0.94);
+    pRough = 0.35;
+    pMetal = 0.1;
     float band = step(abs(vLocal.y - 0.12), 0.16) * step(abs(on.y), 0.5);
     float stripe = step(abs(vLocal.y + 0.25), 0.05);
-    alb = mix(alb, vec3(0.05, 0.06, 0.08), band);
-    alb = mix(alb, vec3(1.0, 0.4, 0.05), stripe);
-    pEmis += uWindow * band * step(0.15, fract(vWPos.x / 2.5)) * 2.0 + vec3(1.0, 0.35, 0.05) * stripe * 1.5;
+    alb = mix(alb, INK, band);
+    alb = mix(alb, CORAL, stripe);
   } else if (kind == 7) {
     float on1 = vStyle.w;
     alb = vec3(0.0);
-    pEmis = mix(vec3(0.6, 0.02, 0.04), vec3(14.0, 0.8, 1.0), on1) * (0.85 + 0.15 * sin(uTime * 50.0 + vWPos.x * 3.0));
+    pEmis = mix(CORAL * 0.25, CORAL * 6.0, on1) * (0.9 + 0.1 * sin(uTime * 50.0 + vWPos.x * 3.0));
   } else if (kind == 8) {
     float chev = step(0.5, fract((fc.x + abs(fc.y - 6.0)) * 0.25));
-    alb = mix(vec3(0.05), vec3(0.95, 0.72, 0.05), chev) * (0.8 + 0.3 * grime);
+    alb = mix(INK, CORAL, chev * 0.85);
     pRough = 0.5;
-    pMetal = 0.5;
-    pEmis += vec3(4.0, 0.2, 0.2) * edge;
+    pMetal = 0.2;
   } else if (kind == 9) {
-    vec3 nc = mix(uNeonA, uNeonB, fract(rnd * 7.0));
-    float bands = step(0.5, fract((vWPos.y + vWPos.x + vWPos.z) * 0.6 - uTime * (0.5 + rnd)));
-    float flick = step(0.04, fract(sin(floor(uTime * 8.0) + rnd * 50.0) * 43758.5));
-    alb = vec3(0.02);
-    pRough = 0.2;
-    pEmis = nc * (0.6 + 0.7 * bands) * (0.3 + 0.7 * flick) * (1.2 + 2.0 * uNight) + nc * edge * 2.0;
+    // panneaux d'affichage pastel (décor)
+    float g = fract((vWPos.y + fc.x * 0.3) * 0.08 + rnd);
+    vec3 a1 = mix(vec3(0.98, 0.78, 0.7), vec3(0.7, 0.82, 0.68), step(0.5, fract(rnd * 5.0)));
+    alb = mix(a1, vec3(0.98, 0.96, 0.92), smoothstep(0.3, 0.7, g));
+    pRough = 0.7;
+    pEmis += alb * 0.15;
   } else if (kind == 10) {
-    alb = vec3(0.1);
-    pEmis = vec3(8.0, 0.4, 0.4) * step(0.55, fract(uTime * 0.7 + rnd));
+    alb = vec3(0.2);
+    pEmis = CORAL * 4.0 * step(0.55, fract(uTime * 0.7 + rnd));
   } else if (kind == 11) {
-    float stripe = step(0.5, fract(vLocal.x * vSize.x * 0.22));
-    alb = mix(vec3(0.04), vec3(0.95, 0.7, 0.05), stripe);
-    pRough = 0.35;
-    pMetal = 0.6;
-    float tip = step(0.47, abs(vLocal.x));
-    pEmis += vec3(6.0, 0.5, 0.3) * (tip + edge * 0.6);
+    // barre tournante : encre, bandes et embouts corail
+    float stripe = step(0.72, fract(vLocal.x * vSize.x * 0.2));
+    alb = mix(INK, CORAL, stripe);
+    pRough = 0.4;
+    pMetal = 0.25;
+    float tip = step(0.46, abs(vLocal.x));
+    alb = mix(alb, CORAL, tip);
+    pEmis += CORAL * (tip * 1.5 + stripe * 0.2);
   } else if (kind == 12) {
+    // mur percé : panneaux encre, cadre corail épais autour de l'ouverture
     vec2 pg = abs(fract(fc / vec2(4.0, 3.0)) - 0.5);
-    float joint = step(0.47, max(pg.x, pg.y));
-    alb = vec3(0.46, 0.47, 0.5) * (0.7 + 0.45 * grime) * (1.0 - joint * 0.35);
-    pRough = 0.85;
-    float rim = 1.0 - smoothstep(0.7, 0.7 + pxw * 2.0, edgeDist);
-    float chev = step(0.5, fract((fc.x + fc.y) * 0.45));
-    alb = mix(alb, mix(vec3(0.03), hazard, chev), rim);
-    float glow = 1.0 - smoothstep(0.12, 0.12 + pxw * 2.0, edgeDist);
-    pEmis += uNeonA * glow * 5.0;
+    float joint = step(0.48, max(pg.x, pg.y));
+    alb = INK * (1.0 + 0.25 * grain) * (1.0 - joint * 0.3);
+    pRough = 0.5;
+    pMetal = 0.15;
+    float rim = 1.0 - smoothstep(0.55, 0.55 + pxw * 2.0, edgeDist);
+    alb = mix(alb, CORAL, rim);
+    pEmis += CORAL * rim * 0.8;
   } else if (kind == 13) {
-    alb = vec3(0.9);
-    pEmis = uWindow * 6.0;
+    alb = vec3(1.0);
+    pEmis = vec3(1.0, 0.96, 0.88) * 2.0;
   } else if (kind == 15) {
-    alb = vec3(0.55, 0.56, 0.58) * (0.7 + 0.5 * grime);
-    pRough = 0.55;
-    pMetal = 0.6;
-    alb *= 0.85 + 0.15 * step(0.5, fract(fc.y * 4.0));
+    alb = vec3(0.86, 0.86, 0.85) * (0.9 + 0.1 * grain);
+    pRough = 0.6;
+    pMetal = 0.3;
+    alb *= 0.9 + 0.1 * step(0.5, fract(fc.y * 4.0));
+  } else if (kind == 16) {
+    // palmier : tronc
+    alb = vec3(0.55, 0.45, 0.36) * (0.85 + 0.25 * step(0.5, fract(vWPos.y * 2.5)));
+    pRough = 0.9;
   }
   vec3 lv = uLightPos - vWPos;
-  pEmis += uLightCol * alb * 30.0 / (30.0 + dot(lv, lv)) * max(dot(on, normalize(lv)), 0.0);
+  pEmis += uLightCol * alb * 20.0 / (20.0 + dot(lv, lv)) * max(dot(on, normalize(lv)), 0.0);
 `;
 
 export function createStructureMaterial(): MeshStandardMaterial {
@@ -336,19 +331,19 @@ export function createGroundMaterial(): MeshStandardMaterial {
           float n1 = vnoise(wp * 0.15);
           float n2 = vnoise(wp * 1.7);
           vec3 alb = uAsphalt * (0.75 + 0.35 * n1 + 0.15 * n2);
-          float puddle = smoothstep(0.58, 0.72, vnoise(wp * 0.07 + 3.0) * 0.7 + n1 * 0.3);
-          gRough = mix(0.82, 0.05, puddle);
-          alb *= 1.0 - puddle * 0.35;
+          vec3 alb0 = uAsphalt * (0.94 + 0.08 * n1 + 0.04 * n2);
+          alb = alb0;
+          gRough = 0.9;
           float dashZ = step(0.45, fract(zg / 9.0));
           float center = (1.0 - smoothstep(0.1, 0.1 + px * 1.5, abs(abs(lx) - 0.22)));
           float lane = (1.0 - smoothstep(0.08, 0.08 + px * 1.5, abs(abs(lx) - hw * 0.5))) * dashZ;
           float edgeL = 1.0 - smoothstep(0.1, 0.1 + px * 1.5, abs(abs(lx) - (hw - 3.4)));
-          alb = mix(alb, vec3(0.85, 0.65, 0.12), center * 0.9);
-          alb = mix(alb, vec3(0.85), max(lane, edgeL) * 0.85);
+          alb = mix(alb, vec3(1.0, 0.55, 0.42), center * 0.9);
+          alb = mix(alb, vec3(0.98), max(lane, edgeL) * 0.9);
           gRough = mix(gRough, 0.6, max(center, max(lane, edgeL)));
           float side = step(hw - 3.0, abs(lx));
           vec2 tg = abs(fract(wp / 1.5) - 0.5);
-          vec3 sw = vec3(0.42, 0.41, 0.4) * (0.8 + 0.3 * n2) * (1.0 - step(0.46, max(tg.x, tg.y)) * 0.25);
+          vec3 sw = vec3(0.93, 0.9, 0.85) * (0.95 + 0.06 * n2) * (1.0 - step(0.47, max(tg.x, tg.y)) * 0.06);
           alb = mix(alb, sw, side);
           gRough = mix(gRough, 0.85, side);
           if (uWater > 0.5) {
@@ -356,11 +351,11 @@ export function createGroundMaterial(): MeshStandardMaterial {
             float wx = sin(wp.x * 0.35 + t * 1.3) * 0.5 + sin(wp.x * 1.1 - wp.y * 0.4 + t * 2.1) * 0.25 + (vnoise(wp * 0.6 + t * 0.4) - 0.5) * 0.6;
             float wz = sin(wp.y * 0.28 - t * 1.1) * 0.5 + sin(wp.y * 0.9 + wp.x * 0.3 - t * 1.7) * 0.25 + (vnoise(wp * 0.6 - t * 0.3 + 9.0) - 0.5) * 0.6;
             gWaterN = normalize(vec3(-wx * 0.12, 1.0, -wz * 0.12));
-            alb = vec3(0.015, 0.05, 0.07);
-            gRough = 0.03;
+            alb = vec3(0.42, 0.72, 0.72);
+            gRough = 0.08;
           }
           vec3 lv = uLightPos - vWPos;
-          gEmis += uLightCol * 40.0 / (40.0 + dot(lv, lv)) * 0.25;
+          gEmis += uLightCol * 30.0 / (30.0 + dot(lv, lv)) * 0.08;
           diffuseColor.rgb = alb;
         }`,
       )
@@ -416,8 +411,8 @@ export function createSkyMaterial(): ShaderMaterial {
         float e = d.y;
         vec3 col = mix(uHorizon, uTop, pow(smoothstep(-0.02, 0.75, e), 0.55));
         float sd = max(dot(d, uSunDir), 0.0);
-        col += uSunColor * (pow(sd, 5.0) * 0.28 + pow(sd, 48.0) * 0.6);
-        col += uSunColor * smoothstep(0.9992, 0.99965, sd) * 14.0;
+        col += uSunColor * (pow(sd, 4.0) * 0.18 + pow(sd, 40.0) * 0.25);
+        col += uSunColor * smoothstep(0.9990, 0.9996, sd) * 1.6;
         if (e > 0.0 && uClouds > 0.0) {
           vec2 cp = d.xz / (e + 0.1) * 0.9 + vec2(uTime * 0.006, uTime * 0.002);
           float n = fbm(cp);
@@ -480,7 +475,6 @@ export function createCeilingMaterial(): ShaderMaterial {
   return new ShaderMaterial({
     transparent: true,
     depthWrite: false,
-    blending: AdditiveBlending,
     side: DoubleSide,
     uniforms: { ...ambient, uNear: { value: 0 } },
     vertexShader: /* glsl */ `
@@ -508,8 +502,8 @@ export function createCeilingMaterial(): ShaderMaterial {
         float line = 1.0 - smoothstep(0.04, 0.04 + aa * 4.0, min(g.x, g.y));
         float d = length(vWorld.xz - uLightPos.xz);
         float local = exp(-d * d / 300.0);
-        float a = line * (0.04 + uNear * local * 1.6) * (1.0 - smoothstep(fogFar * 0.15, fogFar * 0.4, vDepth));
-        gl_FragColor = vec4(uNeonA * a, 1.0);
+        float a = line * uNear * local * 0.55 * (1.0 - smoothstep(fogFar * 0.15, fogFar * 0.4, vDepth));
+        gl_FragColor = vec4(uNeonA, a);
       }
     `,
   });
