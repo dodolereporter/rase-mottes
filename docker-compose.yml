@@ -1,0 +1,22 @@
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    expose:
+      - "3000"
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      PUBLIC_URL: ${PUBLIC_URL:-https://rasemottes.cyber-dodo.fr}
+      SCORE_SECRET: ${SCORE_SECRET}
+    volumes:
+      - rase-mottes-data:/data
+    networks:
+      - dokploy-network
+
+volumes:
+  rase-mottes-data:
+
+networks:
+  dokploy-network:
+    external: true
