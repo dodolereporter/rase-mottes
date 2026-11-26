@@ -1,32 +1,48 @@
-// Moteur de rendu : scène, vues (1 à 4), caméras, missiles, effets, qualité adaptative.
+// Moteur de rendu : scène, lumière, ombres, reflets, vues (1 à 4), caméras, effets, qualité adaptative.
 
 import {
   ACESFilmicToneMapping,
   AdditiveBlending,
-  Points,
-  PointsMaterial,
   BufferAttribute,
   BufferGeometry,
   Color,
+  DirectionalLight,
+  FogExp2,
   Group,
+  HemisphereLight,
   LineBasicMaterial,
   LineSegments,
   Mesh,
+  PCFSoftShadowMap,
   PerspectiveCamera,
   PlaneGeometry,
+  PMREMGenerator,
+  Points,
+  PointsMaterial,
   Scene,
+  ShaderMaterial,
   SphereGeometry,
   SRGBColorSpace,
+  Texture,
+  Vector3,
   WebGLRenderer,
 } from 'three';
 import { Box } from '../../../../shared/collision';
 import { Pilot } from '../../../../shared/sim';
-import { CHUNK_LEN, DISTRICT_LEN, World, clamp } from '../../../../shared/world';
+import { CHUNK_LEN, DISTRICT_COUNT, DISTRICT_LEN, World, clamp } from '../../../../shared/world';
+import { ATMOS, Atmosphere, cloneAtmos, mixAtmos } from './atmosphere';
 import { CityRenderer } from './city';
-import { ambient, createCeilingMaterial, createGroundMaterial, createSkyMaterial } from './materials';
+import {
+  PATH_SAMPLES,
+  PATH_STEP_SHADER,
+  ambient,
+  createCeilingMaterial,
+  createGroundMaterial,
+  createSkyMaterial,
+} from './materials';
 import { createMissile } from './missile';
-import { PALETTES, Palette, mixPalette } from './palette';
 import { Particles } from './particles';
+import { Trail } from './trail';
 import { PostFX, View } from './post';
 
 export interface PilotView {
@@ -34,53 +50,67 @@ export interface PilotView {
   color: string;
   missile: Group;
   camera: PerspectiveCamera;
-  camPos: { x: number; y: number; z: number };
-  roll: number;
+  camX: number;
+  camY: number;
+  lookX: number;
+  lookY: number;
   bank: number;
   shake: number;
+  shakeT: number;
   flash: number;
   flashColor: [number, number, number];
   fov: number;
-  palette: Palette;
+  atmos: Atmosphere;
   label?: string;
   crashT: number;
+  lastTail: Vector3 | null;
+  trail: Trail;
   ghost?: Group;
   ghostPos?: { x: number; y: number; z: number } | null;
 }
 
 const QUALITY_LEVELS = [
-  { pr: 2, bloom: true },
-  { pr: 1.5, bloom: true },
-  { pr: 1.25, bloom: true },
-  { pr: 1, bloom: true },
-  { pr: 0.85, bloom: true },
-  { pr: 0.85, bloom: false },
-  { pr: 0.7, bloom: false },
+  { pr: 2, bloom: true, shadows: 2048 },
+  { pr: 1.5, bloom: true, shadows: 2048 },
+  { pr: 1.25, bloom: true, shadows: 2048 },
+  { pr: 1, bloom: true, shadows: 2048 },
+  { pr: 1, bloom: true, shadows: 1024 },
+  { pr: 0.85, bloom: true, shadows: 0 },
+  { pr: 0.75, bloom: false, shadows: 0 },
+  { pr: 0.6, bloom: false, shadows: 0 },
 ];
 
-/** Circulation aérienne lointaine : files de feux qui filent entre les tours (décor). */
+/** Caméra posée sur le décor : elle suit l'axe de la rue, le missile se déplace dans l'écran. */
+const CAM_BACK = 15;
+const CAM_UP = 4.5;
+const CAM_FOLLOW_X = 0.3; // part du déplacement latéral du missile suivie par la caméra
+const CAM_FOLLOW_Y = 0.3;
+
+/** Circulation aérienne lointaine : files de feux entre les tours (décor). */
 class Traffic {
   readonly points: Points;
   private n = 360;
-  private lane = new Float32Array(this.n * 4); // décalage x, y, vitesse, z
+  private lane = new Float32Array(this.n * 4);
   private pos = new Float32Array(this.n * 3);
   private col = new Float32Array(this.n * 3);
   constructor() {
     for (let i = 0; i < this.n; i++) {
       const side = Math.random() < 0.5 ? -1 : 1;
       const dir = Math.random() < 0.5 ? -1 : 1;
-      this.lane[i * 4] = side * (40 + Math.random() * 110);
-      this.lane[i * 4 + 1] = 35 + Math.floor(Math.random() * 6) * 14 + Math.random() * 2;
-      this.lane[i * 4 + 2] = dir * (35 + Math.random() * 40);
+      this.lane[i * 4] = side * (45 + Math.floor(Math.random() * 5) * 22);
+      this.lane[i * 4 + 1] = 40 + Math.floor(Math.random() * 5) * 16;
+      this.lane[i * 4 + 2] = dir * (40 + Math.random() * 25);
       this.lane[i * 4 + 3] = Math.random() * 1200;
-      const c = dir > 0 ? new Color('#ff3030') : new Color('#fff2d0');
-      c.multiplyScalar(dir > 0 ? 1.2 : 1.6);
+      const c = dir > 0 ? new Color('#ff3a30').multiplyScalar(3) : new Color('#fff2d0').multiplyScalar(4);
       this.col.set([c.r, c.g, c.b], i * 3);
     }
     const geo = new BufferGeometry();
     geo.setAttribute('position', new BufferAttribute(this.pos, 3));
     geo.setAttribute('color', new BufferAttribute(this.col, 3));
-    this.points = new Points(geo, new PointsMaterial({ size: 2.2, vertexColors: true, transparent: true, blending: AdditiveBlending, depthWrite: false, sizeAttenuation: true }));
+    this.points = new Points(
+      geo,
+      new PointsMaterial({ size: 1.6, vertexColors: true, transparent: true, blending: AdditiveBlending, depthWrite: false, fog: false }),
+    );
     this.points.frustumCulled = false;
   }
   update(dt: number, baseZ: number, world: World) {
@@ -98,6 +128,10 @@ class Traffic {
   }
 }
 
+const tmpV = new Vector3();
+const tmpC = new Color();
+const WHITE = new Color('#ffffff');
+
 export class GameRenderer {
   renderer: WebGLRenderer;
   scene = new Scene();
@@ -109,10 +143,14 @@ export class GameRenderer {
   private skyMat = createSkyMaterial();
   private ground: Mesh;
   private groundMat = createGroundMaterial();
-  private debugLines: LineSegments | null = null;
   private ceiling: Mesh;
-  private traffic = new Traffic();
   private ceilingMat = createCeilingMaterial();
+  private traffic = new Traffic();
+  private sun = new DirectionalLight(0xffffff, 3);
+  private hemi = new HemisphereLight(0xffffff, 0x444444, 1);
+  private fog = new FogExp2(0x888888, 0.002);
+  private envMaps: Texture[] = [];
+  private debugLines: LineSegments | null = null;
   private width = 1;
   private height = 1;
   quality = 0;
@@ -128,9 +166,27 @@ export class GameRenderer {
     this.renderer = new WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance', stencil: false });
     this.renderer.outputColorSpace = SRGBColorSpace;
     this.renderer.toneMapping = ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 0.9;
+    this.renderer.toneMappingExposure = 1;
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = PCFSoftShadowMap;
+    this.renderer.shadowMap.autoUpdate = false;
     const maxPr = Math.min(window.devicePixelRatio || 1, 2);
-    this.quality = QUALITY_LEVELS.findIndex((q) => q.pr <= maxPr + 0.01);
+    this.quality = Math.max(0, QUALITY_LEVELS.findIndex((q) => q.pr <= maxPr + 0.01));
+
+    this.scene.fog = this.fog;
+
+    this.sun.castShadow = true;
+    const sc = this.sun.shadow.camera;
+    sc.left = -90;
+    sc.right = 90;
+    sc.top = 90;
+    sc.bottom = -90;
+    sc.near = 1;
+    sc.far = 700;
+    this.sun.shadow.mapSize.set(2048, 2048);
+    this.sun.shadow.bias = -0.0004;
+    this.sun.shadow.normalBias = 0.6;
+    this.scene.add(this.sun, this.sun.target, this.hemi);
 
     this.city = new CityRenderer(world);
     this.scene.add(this.city.group);
@@ -140,13 +196,14 @@ export class GameRenderer {
     this.sky.renderOrder = -10;
     this.scene.add(this.sky);
 
-    this.ground = new Mesh(new PlaneGeometry(6000, 6000), this.groundMat);
+    this.ground = new Mesh(new PlaneGeometry(3000, 3000), this.groundMat);
     this.ground.rotation.x = -Math.PI / 2;
     this.ground.frustumCulled = false;
+    this.ground.receiveShadow = true;
     this.scene.add(this.ground);
     this.scene.add(this.particles.points);
-
     this.scene.add(this.traffic.points);
+
     this.ceiling = new Mesh(new PlaneGeometry(300, 1400), this.ceilingMat);
     this.ceiling.rotation.x = -Math.PI / 2;
     this.ceiling.frustumCulled = false;
@@ -156,59 +213,109 @@ export class GameRenderer {
     if (debug) {
       const geo = new BufferGeometry();
       geo.setAttribute('position', new BufferAttribute(new Float32Array(400 * 24 * 3), 3));
-      this.debugLines = new LineSegments(geo, new LineBasicMaterial({ color: '#00ff88' }));
+      this.debugLines = new LineSegments(geo, new LineBasicMaterial({ color: '#00ff88', fog: false }));
       this.debugLines.frustumCulled = false;
       this.scene.add(this.debugLines);
     }
 
+    this.buildEnvMaps();
     this.post = new PostFX(this.renderer, this.scene);
     this.resize();
     window.addEventListener('resize', () => this.resize());
+  }
+
+  /** Cartes d'environnement (reflets du ciel) précalculées pour chaque quartier. */
+  private buildEnvMaps() {
+    const pmrem = new PMREMGenerator(this.renderer);
+    for (let d = 0; d < DISTRICT_COUNT; d++) {
+      const mat = createSkyMaterial();
+      this.applySky(mat, ATMOS[d as 0]);
+      const s = new Scene();
+      s.add(new Mesh(new SphereGeometry(50, 32, 16), mat));
+      this.envMaps.push(pmrem.fromScene(s, 0, 0.1, 200).texture);
+      mat.dispose();
+    }
+    pmrem.dispose();
+  }
+
+  private applySky(mat: ShaderMaterial, a: Atmosphere) {
+    const u = mat.uniforms;
+    u.uTop.value.copy(a.skyTop);
+    u.uHorizon.value.copy(a.skyHorizon);
+    u.uHaze.value.copy(a.haze);
+    u.uSunDir.value.copy(a.sunDir);
+    u.uSunColor.value.copy(a.sunColor).multiplyScalar(a.sunIntensity > 0 ? 1 : 0);
+    u.uClouds.value = a.clouds;
+    u.uNightSky.value = a.night > 0.9 ? 1 : 0;
   }
 
   setWorld(world: World) {
     this.world = world;
     this.city.setWorld(world);
     this.particles.clear();
+    for (const v of this.views) {
+      v.lastTail = null;
+      v.trail.reset();
+    }
   }
 
   resize() {
     this.width = window.innerWidth;
     this.height = window.innerHeight;
-    const pr = Math.min(QUALITY_LEVELS[this.quality].pr, window.devicePixelRatio > 1 ? 2 : 1.25);
+    const q = QUALITY_LEVELS[this.quality];
+    const pr = Math.min(q.pr, window.devicePixelRatio > 1 ? 2 : 1.25);
     this.renderer.setPixelRatio(pr);
     this.renderer.setSize(this.width, this.height, false);
-    this.post.setSize(this.width, this.height, pr);
-    this.post.bloom.enabled = QUALITY_LEVELS[this.quality].bloom;
+    this.post?.setSize(this.width, this.height, pr);
+    if (this.post) this.post.bloom.enabled = q.bloom;
+    this.applyShadowQuality();
     this.particles.setViewportHeight(this.height * pr);
-    this.particles.scale = this.quality >= 5 ? 0.5 : 1;
+    this.particles.scale = this.quality >= 6 ? 0.5 : 1;
     this.layoutViews();
+  }
+
+  private applyShadowQuality() {
+    const size = QUALITY_LEVELS[this.quality].shadows;
+    const on = size > 0 && this.views.length <= 2;
+    this.sun.castShadow = on;
+    if (on && this.sun.shadow.mapSize.x !== size) {
+      this.sun.shadow.mapSize.set(size, size);
+      this.sun.shadow.map?.dispose();
+      (this.sun.shadow as unknown as { map: null }).map = null;
+    }
   }
 
   setPilots(list: { pilot: Pilot; color: string; label?: string }[], ghost = false) {
     for (const v of this.views) {
-      this.scene.remove(v.missile);
+      this.scene.remove(v.missile, v.trail.mesh);
       if (v.ghost) this.scene.remove(v.ghost);
     }
     this.views = list.map(({ pilot, color, label }) => {
       const missile = createMissile(color);
-      this.scene.add(missile);
-      const camera = new PerspectiveCamera(70, 1, 0.2, 2600);
+      const trail = new Trail(new Color(color).lerp(new Color('#ffffff'), 0.45).multiplyScalar(1.6));
+      this.scene.add(missile, trail.mesh);
+      const camera = new PerspectiveCamera(62, 1, 0.3, 3000);
+      const pp = this.world.pathAt(Math.max(0, pilot.z - CAM_BACK));
       const v: PilotView = {
         pilot,
         color,
         missile,
         camera,
-        camPos: { x: pilot.x, y: pilot.y + 2.5, z: pilot.z - 9 },
-        roll: 0,
+        camX: pp.x,
+        camY: pp.y + CAM_UP,
+        lookX: pp.x,
+        lookY: pp.y,
         bank: 0,
         shake: 0,
+        shakeT: 0,
         flash: 0,
         flashColor: [1, 1, 1],
-        fov: 70,
-        palette: mixPalette(PALETTES[0], PALETTES[0], 0),
+        fov: 62,
+        atmos: cloneAtmos(ATMOS[0]),
         label,
         crashT: 0,
+        lastTail: null,
+        trail,
       };
       if (ghost) {
         v.ghost = createMissile('#ffffff', true);
@@ -217,6 +324,7 @@ export class GameRenderer {
       }
       return v;
     });
+    this.applyShadowQuality();
     this.layoutViews();
   }
 
@@ -224,16 +332,18 @@ export class GameRenderer {
   private layoutViews() {
     const n = this.views.length;
     if (n <= 1) this.rects = [{ x: 0, y: 0, w: 1, h: 1 }];
-    else if (n === 2) this.rects = [
-      { x: 0, y: 0, w: 0.5, h: 1 },
-      { x: 0.5, y: 0, w: 0.5, h: 1 },
-    ];
-    else this.rects = [
-      { x: 0, y: 0.5, w: 0.5, h: 0.5 },
-      { x: 0.5, y: 0.5, w: 0.5, h: 0.5 },
-      { x: 0, y: 0, w: 0.5, h: 0.5 },
-      { x: 0.5, y: 0, w: 0.5, h: 0.5 },
-    ];
+    else if (n === 2)
+      this.rects = [
+        { x: 0, y: 0, w: 0.5, h: 1 },
+        { x: 0.5, y: 0, w: 0.5, h: 1 },
+      ];
+    else
+      this.rects = [
+        { x: 0, y: 0.5, w: 0.5, h: 0.5 },
+        { x: 0.5, y: 0.5, w: 0.5, h: 0.5 },
+        { x: 0, y: 0, w: 0.5, h: 0.5 },
+        { x: 0.5, y: 0, w: 0.5, h: 0.5 },
+      ];
     this.views.forEach((v, i) => {
       const r = this.rects[i];
       v.camera.aspect = (r.w * this.width) / (r.h * this.height);
@@ -241,7 +351,6 @@ export class GameRenderer {
     });
   }
 
-  /** Rectangles des vues en pixels CSS (origine en haut à gauche) pour le HUD. */
   viewRectsCss() {
     return this.rects.slice(0, this.views.length).map((r) => ({
       left: r.x * this.width,
@@ -251,17 +360,14 @@ export class GameRenderer {
     }));
   }
 
-  private paletteAt(z: number, out: Palette) {
+  private atmosAt(z: number, out: Atmosphere) {
     const k = Math.floor(z / DISTRICT_LEN);
     const into = z - k * DISTRICT_LEN;
-    const cur = PALETTES[this.world.districtIndexAt(z)];
-    if (into < 160 && k > 0) {
-      const prev = PALETTES[this.world.districtIndexAt(z - 170)];
-      mixPalette(prev, cur, into / 160, out);
-    } else mixPalette(cur, cur, 0, out);
+    const cur = ATMOS[this.world.districtIndexAt(z)];
+    if (into < 220 && k > 0) mixAtmos(ATMOS[this.world.districtIndexAt(z - 230)], cur, into / 220, out);
+    else mixAtmos(cur, cur, 0, out);
   }
 
-  /** Effets ponctuels. */
   kick(i: number, shake: number, flash = 0, color: [number, number, number] = [1, 1, 1]) {
     const v = this.views[i];
     if (!v) return;
@@ -277,24 +383,23 @@ export class GameRenderer {
     if (!v) return;
     const p = v.pilot;
     const c = new Color(v.color);
-    this.particles.burst(p.x, p.y, -p.z, 260, 45, new Color('#ffb347').multiplyScalar(2), 1.6, 1.2);
-    this.particles.burst(p.x, p.y, -p.z, 160, 70, c.clone().multiplyScalar(2.5), 1.0, 0.9);
-    this.particles.burst(p.x, p.y, -p.z, 80, 20, new Color('#ffffff').multiplyScalar(2), 2.6, 0.5);
+    this.particles.burst(p.x, p.y, -p.z, 260, 45, new Color('#ffb347').multiplyScalar(4), 1.8, 1.2);
+    this.particles.burst(p.x, p.y, -p.z, 160, 70, c.clone().multiplyScalar(4), 1.0, 0.9);
+    this.particles.burst(p.x, p.y, -p.z, 80, 20, new Color('#ffffff').multiplyScalar(3), 2.6, 0.5);
     v.missile.visible = false;
     v.crashT = 0.001;
-    this.kick(i, 1.6, 0.9, [1, 0.55, 0.3]);
+    this.kick(i, 1.4, 0.8, [1, 0.6, 0.35]);
   }
 
   sparks(i: number, side: number) {
     const v = this.views[i];
     if (!v) return;
     const p = v.pilot;
-    const c = new Color(v.color).multiplyScalar(2.5);
+    const c = new Color('#ffd27a').multiplyScalar(5);
     for (let k = 0; k < 18 * this.particles.scale; k++)
-      this.particles.emit(p.x + side * 0.8, p.y, -p.z, side * (8 + Math.random() * 15), (Math.random() - 0.5) * 12, 20 + Math.random() * 30, c, 0.5, 0.35, 3);
+      this.particles.emit(p.x + side * 0.8, p.y, -p.z, side * (8 + Math.random() * 15), (Math.random() - 0.5) * 12, (Math.random() - 0.5) * 10, c, 0.35, 0.3, 2);
   }
 
-  /** Une image : alpha = fraction d'interpolation, realDt = temps réel écoulé, t = temps du monde. */
   render(alpha: number, realDt: number, t: number, ghostFrame?: (i: number) => { x: number; y: number; z: number } | null) {
     // qualité adaptative
     this.frameTimes.push(realDt);
@@ -309,7 +414,6 @@ export class GameRenderer {
         this.frameTimes = [];
         this.resize();
       } else if (this.fps > 59.5 && avg < 1 / 75 && this.quality > 0 && now - this.lastQualityChange > 15000) {
-        // marge confortable : on remonte d'un cran (rarement)
         this.quality--;
         this.lastQualityChange = now;
         this.frameTimes = [];
@@ -318,8 +422,6 @@ export class GameRenderer {
     }
 
     ambient.uTime.value = t;
-
-    // tronçons nécessaires pour chaque pilote
     const ranges: [number, number][] = this.views.map((v) => {
       const c = Math.floor(v.pilot.z / CHUNK_LEN);
       return [c - 1, c + 5];
@@ -333,65 +435,81 @@ export class GameRenderer {
       const y = p.prev.y + (p.y - p.prev.y) * alpha;
       const z = p.prev.z + (p.z - p.prev.z) * alpha;
       const lm = p.latMax || 1;
-
-      // missile : roulis dans les virages, tangage selon la montée
-      const targetBank = -clamp(p.vx / lm, -1, 1) * 0.95;
-      v.bank += (targetBank - v.bank) * (1 - Math.exp(-realDt * 14));
-      v.missile.position.set(x, y, -z);
-      // le nez pointe dans la direction de vol réelle (cap et assiette pilotés par le téléphone)
       const fwd = Math.max(p.speed, 1);
-      v.missile.rotation.set(Math.atan2(p.vy, fwd) * 1.3, -Math.atan2(p.vx, fwd) * 1.3, v.bank, 'YXZ');
+      const smooth = (rate: number) => 1 - Math.exp(-realDt * rate);
+
+      // ---- missile : cap et assiette = direction de vol, roulis dans les virages
+      const headYaw = Math.atan2(p.vx, fwd);
+      const headPitch = Math.atan2(p.vy, fwd);
+      v.bank += (-clamp(p.vx / lm, -1, 1) * 0.9 - v.bank) * smooth(10);
+      v.missile.position.set(x, y, -z);
+      v.missile.rotation.set(headPitch * 1.5, -headYaw * 1.5, v.bank, 'YXZ');
+      v.missile.updateMatrixWorld();
       const flame = v.missile.getObjectByName('flame');
-      if (flame) flame.scale.set(1, 1, (p.boosting ? 2.2 : 1) * (0.85 + Math.random() * 0.3));
+      if (flame) flame.scale.set(1, (p.boosting ? 2.0 : 1) * (0.9 + Math.sin(t * 90) * 0.1), 1);
       const sh = v.missile.getObjectByName('shield');
       if (sh) sh.visible = p.shield;
 
-      // traînée
-      if (p.alive) {
-        const c = new Color(v.color).multiplyScalar(p.boosting ? 1.8 : 1.0);
-        const n = Math.ceil((p.boosting ? 4 : 2) * this.particles.scale);
-        for (let k = 0; k < n; k++)
-          this.particles.emit(x + (Math.random() - 0.5) * 0.3, y + (Math.random() - 0.5) * 0.3, -z + 2.2, (Math.random() - 0.5) * 2, (Math.random() - 0.5) * 2, 8, c, p.boosting ? 0.9 : 0.6, 0.35, 1);
-      } else if (v.crashT > 0) {
-        v.crashT += realDt;
-        if (v.crashT < 2.5 && Math.random() < 0.6)
-          this.particles.emit(x + (Math.random() - 0.5) * 3, y, -z, (Math.random() - 0.5) * 3, 6 + Math.random() * 6, (Math.random() - 0.5) * 3, new Color('#ff7a30').multiplyScalar(1.5), 2.5, 1.2, 1);
+      // ---- traînée : ruban continu + quelques étincelles chaudes près de la tuyère
+      if (p.alive && v.missile.visible) {
+        const tail = v.missile.localToWorld(tmpV.set(0, 0, 1.9)).clone();
+        v.trail.width = p.boosting ? 0.75 : 0.5;
+        v.trail.push(tail);
+        if (Math.random() < 0.6) {
+          const hot = tmpC.set(v.color).lerp(WHITE, 0.5).multiplyScalar(3);
+          this.particles.emit(tail.x, tail.y, tail.z, (Math.random() - 0.5) * 3, (Math.random() - 0.5) * 3, 4 + Math.random() * 4, hot, 0.35, 0.18, 4);
+        }
+        v.lastTail = tail;
+      } else {
+        v.lastTail = null;
+        if (v.crashT > 0) {
+          v.crashT += realDt;
+          if (v.crashT < 2.5 && Math.random() < 0.7)
+            this.particles.emit(x + (Math.random() - 0.5) * 3, y, -z, (Math.random() - 0.5) * 3, 6 + Math.random() * 6, (Math.random() - 0.5) * 3, new Color('#ff8a40').multiplyScalar(2.5), 2.5, 1.2, 1);
+        }
       }
 
-      // caméra : suit avec un léger retard, roulis partiel
-      const speed01 = clamp((p.speed - 60) / 220, 0, 1);
-      const back = 8.5 + speed01 * 2.5;
-      const k = 1 - Math.exp(-realDt * (p.alive ? 9 : 2));
-      v.camPos.x += (x - v.camPos.x) * k;
-      v.camPos.y += (y + 2.3 - v.camPos.y) * k;
-      v.camPos.z = p.alive ? z - back : v.camPos.z + (z - back - 6 - v.camPos.z) * k;
-      v.roll += (v.bank * 0.35 - v.roll) * (1 - Math.exp(-realDt * 6));
-      v.shake = Math.max(0, v.shake - realDt * 2.2);
+      // ---- caméra posée sur le décor : suit l'axe de la rue, le missile se balade dans l'image
+      const speed01 = clamp((p.speed - 60) / 240, 0, 1);
+      const camZ = z - CAM_BACK;
+      const axis = this.world.pathAt(Math.max(0, camZ));
+      const ahead = this.world.pathAt(z + 70);
+      // dans les rues larges, la caméra suit un peu plus pour garder le missile à l'écran
+      const followX = clamp(1 - 13 / (this.world.districtDef(z).halfW + 1.5), CAM_FOLLOW_X, 0.6);
+      const tx = axis.x + (x - axis.x) * followX;
+      const ty = Math.max(3, axis.y + CAM_UP + (y - axis.y) * CAM_FOLLOW_Y);
+      const k = smooth(p.alive ? 6 : 2);
+      v.camX += (tx - v.camX) * k;
+      v.camY += (ty - v.camY) * k;
+      v.lookX += (ahead.x + (x - ahead.x) * followX - v.lookX) * smooth(4);
+      v.lookY += (ahead.y + (y - ahead.y) * CAM_FOLLOW_Y * 0.5 - v.lookY) * smooth(4);
+      v.shake = Math.max(0, v.shake - realDt * 2.5);
+      v.shakeT += realDt;
       v.flash = Math.max(0, v.flash - realDt * 2.5);
-      const shk = v.shake * v.shake * 0.9 + (p.boosting ? 0.05 : 0) + speed01 * 0.02;
+      const sk = v.shake * v.shake * 0.6;
+      const shx = (Math.sin(v.shakeT * 37) + Math.sin(v.shakeT * 61) * 0.5) * sk;
+      const shy = (Math.sin(v.shakeT * 43 + 1) + Math.sin(v.shakeT * 71) * 0.5) * sk;
       const cam = v.camera;
-      cam.position.set(v.camPos.x + (Math.random() - 0.5) * shk, v.camPos.y + (Math.random() - 0.5) * shk, -v.camPos.z);
-      cam.lookAt(x * 0.7 + v.camPos.x * 0.3, y + 0.6, -(z + 40));
-      cam.rotateZ(v.roll);
-      const fovTarget = 68 + speed01 * 22 + (p.boosting ? 8 : 0) - (p.brakeT > 0 ? 6 : 0);
-      v.fov += (fovTarget - v.fov) * (1 - Math.exp(-realDt * 4));
+      cam.position.set(v.camX + shx, v.camY + shy, -camZ);
+      cam.up.set(0, 1, 0);
+      cam.lookAt(v.lookX, v.lookY, -(z + 70));
+      const fovTarget = 60 + speed01 * 14 + (p.boosting ? 6 : 0) - (p.brakeT > 0 ? 4 : 0);
+      v.fov += (fovTarget - v.fov) * smooth(4);
       cam.fov = v.fov;
       cam.updateProjectionMatrix();
 
-      this.paletteAt(z, v.palette);
+      this.atmosAt(z, v.atmos);
 
-      // fantôme
       if (v.ghost && ghostFrame) {
         const gp = ghostFrame(i);
         v.ghostPos = gp;
-        v.ghost.visible = !!gp;
         if (gp) v.ghost.position.set(gp.x, gp.y, -gp.z);
       }
 
       views.push({
         camera: cam,
         rect: this.rects[i],
-        speed: p.alive ? speed01 * 0.8 + (p.boosting ? 0.5 : 0) : 0,
+        speed: p.alive ? speed01 * 0.6 + (p.boosting ? 0.4 : 0) : 0,
         aberration: p.boosting ? 1 : p.slowmoT > 0 ? 0.4 : 0,
         flash: v.flash,
         flashColor: v.flashColor,
@@ -400,35 +518,57 @@ export class GameRenderer {
     });
 
     this.particles.update(realDt);
-    if (this.views[0]) this.traffic.update(realDt, this.views[0].pilot.z, this.world);
-    // en tunnel, pas de circulation aérienne visible
-    this.traffic.points.visible = !!this.views[0] && this.world.districtDef(this.views[0].pilot.z).ceiling === undefined;
-    if (this.debugLines && this.views[0]) this.updateDebug(this.views[0].pilot, t);
+    const v0 = this.views[0];
+    if (v0) {
+      this.traffic.update(realDt, v0.pilot.z, this.world);
+      this.traffic.points.visible = this.world.districtDef(v0.pilot.z).ceiling === undefined;
+      this.renderer.toneMappingExposure = v0.atmos.exposure;
+      this.post.setGrade(v0.atmos.grade);
+    }
+    if (this.debugLines && v0) this.updateDebug(v0.pilot, t);
     this.post.render(views, t);
   }
 
   private beforeView(v: PilotView, t: number) {
-    const pal = v.palette;
-    ambient.fogColor.value.copy(pal.fog);
-    ambient.fogNear.value = pal.fogNear;
-    ambient.fogFar.value = pal.fogFar;
-    ambient.uNeonA.value.copy(pal.neonA);
-    ambient.uNeonB.value.copy(pal.neonB);
-    ambient.uWindow.value.copy(pal.window);
-    const su = this.skyMat.uniforms;
-    su.uTop.value.copy(pal.skyTop);
-    su.uBottom.value.copy(pal.skyBottom);
-    su.uHorizon.value.copy(pal.horizon);
-    su.uSkyline.value.copy(pal.skyline);
+    const a = v.atmos;
+    const pz = v.pilot.z;
+    this.fog.color.copy(a.haze);
+    this.fog.density = a.fogDensity;
+    ambient.fogFar.value = 2.5 / a.fogDensity;
+    this.sun.color.copy(a.sunColor);
+    this.sun.intensity = a.sunIntensity;
+    this.hemi.color.copy(a.hemiSky);
+    this.hemi.groundColor.copy(a.hemiGround);
+    this.hemi.intensity = a.hemiIntensity;
+    const focus = tmpV.set(v.pilot.x, 0, -(pz + 60));
+    this.sun.target.position.copy(focus);
+    this.sun.position.copy(focus).addScaledVector(a.sunDir, 300);
+    this.sun.target.updateMatrixWorld();
+    this.sun.updateMatrixWorld();
+    if (this.sun.castShadow) this.renderer.shadowMap.needsUpdate = true;
+    this.scene.environment = this.envMaps[this.world.districtIndexAt(pz)];
+    this.scene.environmentIntensity = a.envIntensity;
+    this.applySky(this.skyMat, a);
     this.sky.position.copy(v.camera.position);
-    const gu = this.groundMat.uniforms;
-    gu.uGround.value.copy(pal.ground);
-    gu.uGrid.value.copy(pal.grid);
-    gu.uWater.value = pal.water;
+    for (const o of this.views) o.trail.orient(v.camera);
+    ambient.uNight.value = a.night;
+    ambient.uNeonA.value.copy(a.neonA);
+    ambient.uNeonB.value.copy(a.neonB);
+    ambient.uWindow.value.copy(a.window);
+    const gu = this.groundMat.userData.uniforms;
+    const z0 = Math.floor(pz / PATH_STEP_SHADER) * PATH_STEP_SHADER - 60;
+    gu.uPathZ0.value = z0;
+    for (let k = 0; k < PATH_SAMPLES; k++) {
+      const zz = Math.max(0, z0 + k * PATH_STEP_SHADER);
+      gu.uPath.value[k].set(this.world.pathAt(zz).x, this.world.districtDef(zz).halfW);
+    }
+    gu.uWater.value = a.water > 0.5 ? 1 : 0;
+    gu.uAsphalt.value.copy(a.asphalt);
     this.ground.position.set(Math.round(v.camera.position.x / 10) * 10, 0, Math.round(v.camera.position.z / 10) * 10);
     this.city.prepareView(t, (id) => v.pilot.isTaken(id));
-    // plafond du couloir (absent dans les tunnels, qui ont un vrai plafond)
-    const pz = v.pilot.z;
+    ambient.uLightPos.value.copy(v.missile.position);
+    ambient.uLightPos.value.z += 1.5;
+    ambient.uLightCol.value.set(v.color).multiplyScalar(v.pilot.alive ? (v.pilot.boosting ? 1.0 : 0.5) : 0);
     const tunnel = this.world.districtDef(pz).ceiling !== undefined;
     this.ceiling.visible = !tunnel;
     if (!tunnel) {
@@ -436,10 +576,6 @@ export class GameRenderer {
       this.ceiling.position.set(v.pilot.x, cy, -(pz + 600));
       this.ceilingMat.uniforms.uNear.value = clamp(1 - (cy - v.pilot.y) / 7, 0, 1);
     }
-    ambient.uLightPos.value.copy(v.missile.position);
-    ambient.uLightPos.value.z += 1.5;
-    ambient.uLightCol.value.set(v.color).multiplyScalar(v.pilot.alive ? (v.pilot.boosting ? 1.0 : 0.6) : 0);
-    // les autres missiles restent visibles (écran partagé) ; le fantôme n'apparaît que dans sa vue
     for (const o of this.views) if (o.ghost) o.ghost.visible = o === v && !!o.ghostPos;
   }
 

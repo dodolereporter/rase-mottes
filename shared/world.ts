@@ -41,6 +41,36 @@ export interface DistrictDef {
   ceiling?: number;
   density: number;
   weights: Partial<Record<ObstacleTemplate, number>>;
+  patterns: Partial<Record<Pattern, number>>;
+  /** longueur d'un pâté de maisons (entre deux rues transversales) */
+  pitch: number;
+}
+
+/** Séquences d'obstacles pensées (level design), enchaînées avec des respirations. */
+export type Pattern =
+  | 'gates'
+  | 'slots'
+  | 'overunder'
+  | 'columns'
+  | 'rotors'
+  | 'blockwall'
+  | 'lasers'
+  | 'trains'
+  | 'doors'
+  | 'containers'
+  | 'drones';
+
+interface Segment {
+  index: number;
+  z0: number;
+  z1: number;
+  pattern: Pattern | 'breather';
+  axis: 'x' | 'y' | 'none';
+  amp: number;
+  lambda: number;
+  baseX: number;
+  baseY: number;
+  first: number; // z du premier élément
 }
 
 export type ObstacleTemplate =
@@ -66,47 +96,57 @@ export const DISTRICTS: DistrictDef[] = [
     halfW: 20,
     yMin: 9,
     yMax: 30,
-    maxSlope: 0.24,
+    maxSlope: 0.36,
     wallH: [25, 85],
     density: 1,
-    weights: { holeH: 2.2, holeV: 2.2, holeSq: 1.8, rotor: 1.6, cubes: 2, beam: 1.5, pillar: 1.5, drone: 1.2, laser: 1.2 },
+    weights: {},
+    patterns: { gates: 3, slots: 2, overunder: 2, rotors: 2, blockwall: 2, columns: 1.5, lasers: 1, drones: 1 },
+    pitch: 90,
   },
   {
     halfW: 22,
     yMin: 8,
     yMax: 26,
-    maxSlope: 0.24,
+    maxSlope: 0.36,
     wallH: [8, 24],
     density: 1,
-    weights: { holeH: 1.6, holeV: 1.6, holeSq: 1.2, rotor: 2, beam: 2.5, pillar: 2, crane: 1.4, train: 1.4, cubes: 1 },
+    weights: {},
+    patterns: { overunder: 3, columns: 2.5, trains: 2, rotors: 1.5, gates: 1.5, slots: 1.5 },
+    pitch: 120,
   },
   {
     halfW: 10,
     yMin: 12,
     yMax: 30,
-    maxSlope: 0.14,
+    maxSlope: 0.26,
     wallH: [90, 230],
     density: 0.9,
-    weights: { holeH: 2.5, holeV: 2, holeSq: 2.5, rotor: 1.5, beam: 2, cubes: 1.5, drone: 1 },
+    weights: {},
+    patterns: { gates: 3, slots: 3, overunder: 2, rotors: 1.5, blockwall: 1.5 },
+    pitch: 110,
   },
   {
     halfW: 10,
     yMin: 8,
     yMax: 8.6,
-    maxSlope: 0.14,
+    maxSlope: 0.26,
     wallH: [17, 17],
     ceiling: 17,
     density: 1.05,
-    weights: { holeSq: 2, holeH: 1.5, holeV: 1.5, rotor: 1.8, pillar: 2, block: 1.5, door: 2, laser: 1.6 },
+    weights: {},
+    patterns: { doors: 3, lasers: 2.5, gates: 2, rotors: 1.5, columns: 1.5 },
+    pitch: 200,
   },
   {
     halfW: 28,
     yMin: 8,
     yMax: 22,
-    maxSlope: 0.24,
+    maxSlope: 0.36,
     wallH: [3, 9],
     density: 1,
-    weights: { containers: 3, holeH: 1.5, holeV: 1.2, holeSq: 1, rotor: 1.4, gantry: 1.5, crane: 1.5, train: 1.2, cubes: 1 },
+    weights: {},
+    patterns: { containers: 3, trains: 1.5, gates: 1.5, slots: 1.5, rotors: 1.5, overunder: 1 },
+    pitch: 100,
   },
 ];
 
@@ -293,17 +333,13 @@ export class World {
   readonly seed: number;
   private px: number[] = [];
   private py: number[] = [];
-  private pathRng: Rng;
   private vx = 0;
   private vy = 0;
-  private yTarget = 18;
-  private yTargetUntil = 0;
   private chunks = new Map<number, Chunk>();
   private districtCache = new Map<number, District>();
 
   constructor(seed: number) {
     this.seed = seed >>> 0;
-    this.pathRng = new Rng(hash2(this.seed, 1));
     this.px.push(0);
     this.py.push(16);
   }
@@ -344,32 +380,92 @@ export class World {
 
   // ----- chemin navigable -----------------------------------------------------
 
+  // ----- séquences (level design) -------------------------------------------
+
+  private segs: Segment[] = [];
+  private segRng: Rng = new Rng(1);
+
+  /** Séquence couvrant z (générées dans l'ordre, de façon déterministe). */
+  segmentAt(z: number): Segment {
+    if (!this.segs.length) this.segRng = new Rng(hash2(this.seed, 5));
+    while (!this.segs.length || this.segs[this.segs.length - 1].z1 <= z) this.pushSegment();
+    let lo = 0;
+    let hi = this.segs.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (this.segs[mid].z1 <= z) lo = mid + 1;
+      else hi = mid;
+    }
+    return this.segs[lo];
+  }
+
+  private pushSegment() {
+    const r = this.segRng;
+    const prev = this.segs[this.segs.length - 1];
+    const z0 = prev ? prev.z1 : 0;
+    const index = this.segs.length;
+    const def = this.districtDef(z0 + 1);
+    const tunnel = def.ceiling !== undefined || this.districtDef(z0 + 400).ceiling !== undefined;
+    const baseX = clamp((prev?.baseX ?? 0) + r.range(-14, 14), -45, 45);
+    const yLo = Math.max(def.yMin, 9);
+    const baseY = tunnel ? 8.3 : r.range(yLo + 2, Math.max(yLo + 2.5, def.yMax - 4));
+    const breather = !prev || prev.pattern !== 'breather';
+    if (breather) {
+      const len = index === 0 ? 260 : r.range(90, 150);
+      this.segs.push({ index, z0, z1: z0 + len, pattern: 'breather', axis: 'none', amp: 0, lambda: 100, baseX, baseY, first: z0 });
+      return;
+    }
+    const pattern = r.weighted(def.patterns) as Pattern;
+    const diff = difficulty(z0);
+    // rythme calé sur le temps : un élément toutes les ~0,8 s au début, ~0,5 s à la fin
+    const spacing = clamp(baseSpeed(z0) * lerp(0.85, 0.5, diff), 42, 150);
+    const lambda = spacing * 2;
+    const slope = Math.min(def.maxSlope, 0.36);
+    const maxAmp = ((slope * lambda) / (2 * Math.PI)) * 0.8;
+    let axis: Segment['axis'] = 'none';
+    let amp = 0;
+    if (pattern === 'gates' || pattern === 'blockwall' || pattern === 'containers') {
+      axis = 'x';
+      amp = Math.min(maxAmp, r.range(5, 11));
+    } else if ((pattern === 'slots' || pattern === 'overunder') && !tunnel) {
+      axis = 'y';
+      amp = Math.min(maxAmp * 0.7, r.range(4, 7), (def.yMax - def.yMin) / 2);
+    } else if (pattern === 'columns' || pattern === 'rotors') {
+      axis = 'x';
+      amp = Math.min(maxAmp, r.range(2, 5));
+    }
+    const count = r.int(4, 7);
+    const first = z0 + lambda / 4;
+    const z1 = first + (count - 1) * spacing + spacing * 0.6;
+    this.segs.push({ index, z0, z1, pattern, axis, amp, lambda, baseX, baseY: tunnel ? 8.3 : clamp(baseY, yLo + amp + 1, def.yMax), first });
+  }
+
   private extendPath(toZ: number): void {
     const need = Math.ceil(toZ / PATH_STEP) + 2;
     while (this.px.length < need) {
       const i = this.px.length;
       const z = i * PATH_STEP;
-      const r = this.pathRng;
-      // On anticipe le quartier à venir pour arriver à la bonne altitude (tunnels).
       const cur = this.districtDef(z);
       const ahead = this.districtDef(z + 320);
-      const def = ahead.ceiling !== undefined ? ahead : cur.ceiling !== undefined ? cur : ahead;
       const slope = Math.min(cur.maxSlope, ahead.maxSlope);
-      const gHalf = minGap(z + 320) / 2;
-      const yLo = Math.max(def.yMin, gHalf + 1);
-      const yHi = Math.max(yLo, def.ceiling !== undefined ? def.ceiling - gHalf - 0.5 : def.yMax);
-      if (z >= this.yTargetUntil || this.yTarget < yLo || this.yTarget > yHi) {
-        this.yTarget = r.range(yLo, yHi);
-        this.yTargetUntil = z + r.range(120, 300);
-      }
       const maxStep = slope * PATH_STEP;
-      // marche aléatoire à courbure bornée
-      this.vx += r.range(-1, 1) * 0.55 * (slope / 0.24);
-      this.vx -= this.px[i - 1] * 0.004;
-      this.vx = clamp(this.vx, -maxStep, maxStep);
+      const gHalf = minGap(z + 320) / 2;
+      // cible donnée par la séquence (ondulation calée sur les éléments)
+      const zt = z + 12;
+      const seg = this.segmentAt(zt);
+      const w = seg.axis === 'none' ? 0 : seg.amp * Math.sin(((zt - seg.first) / seg.lambda) * Math.PI * 2 + Math.PI / 2);
+      let tx = seg.baseX + (seg.axis === 'x' ? w : 0);
+      let ty = seg.baseY + (seg.axis === 'y' ? w : 0);
+      const tunnelSoon = ahead.ceiling !== undefined || cur.ceiling !== undefined;
+      if (tunnelSoon) ty = 8.3;
+      ty = Math.max(ty, gHalf + 1);
+      void tx;
+      const dvx = clamp((tx - this.px[i - 1]) * 0.45, -maxStep, maxStep);
+      this.vx += clamp(dvx - this.vx, -maxStep * 0.4, maxStep * 0.4);
+      const maxStepY = maxStep * 0.8;
+      const dvy = clamp((ty - this.py[i - 1]) * 0.45, -maxStepY, maxStepY);
+      this.vy += clamp(dvy - this.vy, -maxStepY * 0.4, maxStepY * 0.4);
       const x = this.px[i - 1] + this.vx;
-      const targetVy = clamp((this.yTarget - this.py[i - 1]) * 0.12, -maxStep * 0.6, maxStep * 0.6);
-      this.vy += clamp(targetVy - this.vy, -0.35, 0.35);
       let y = this.py[i - 1] + this.vy;
       y = clamp(y, Math.max(gHalf + 0.6, 4), 60);
       if (cur.ceiling !== undefined) y = Math.min(y, cur.ceiling - minGap(z) / 2 - 0.4);
@@ -482,43 +578,50 @@ export class World {
     return chunk;
   }
 
-  private buildWalls(chunk: Chunk, rng: Rng, add: AddFn) {
-    for (const side of [-1, 1]) {
-      let z = chunk.z0;
-      while (z < chunk.z1) {
-        const def = this.districtDef(z);
-        const tunnel = def.ceiling !== undefined;
-        const len = tunnel ? Math.min(40, chunk.z1 - z) : rng.range(14, 42);
-        const za = z;
-        // on ne chevauche jamais une frontière de quartier (entrée/sortie de tunnel nette)
-        const boundary = (Math.floor(z / DISTRICT_LEN) + 1) * DISTRICT_LEN;
-        const zb = Math.min(chunk.z1, z + len, boundary);
-        const defB = this.districtDef(zb - 0.01);
-        const halfW = Math.min(def.halfW, defB.halfW);
-        const pr = this.pathRange(za - 2, zb + 2);
-        const h = tunnel ? def.ceiling! + 1 : rng.range(def.wallH[0], def.wallH[1]);
-        const depth = rng.range(18, 36);
-        if (side < 0) {
-          const inner = pr.minX - halfW;
-          add('wall', makeBox(inner - depth, 0, za, inner, h, zb));
-          if (!tunnel) {
-            const h2 = h * rng.range(0.9, 2.2) + 10;
-            chunk.decor.push(makeBox(inner - depth - rng.range(25, 50), 0, za, inner - depth - 4, h2, zb));
-          }
-        } else {
-          const inner = pr.maxX + halfW;
-          add('wall', makeBox(inner, 0, za, inner + depth, h, zb));
-          if (!tunnel) {
-            const h2 = h * rng.range(0.9, 2.2) + 10;
-            chunk.decor.push(makeBox(inner + depth + 4, 0, za, inner + depth + rng.range(25, 50), h2, zb));
+  /** Pâtés de maisons alignés des deux côtés, rues transversales, hauteurs cohérentes par îlot. */
+  private buildWalls(chunk: Chunk, _rng: Rng, add: AddFn) {
+    let z = chunk.z0;
+    while (z < chunk.z1) {
+      const def = this.districtDef(z + 0.01);
+      const tunnel = def.ceiling !== undefined;
+      const boundary = (Math.floor(z / DISTRICT_LEN) + 1) * DISTRICT_LEN;
+      const pitch = def.pitch;
+      const blk = Math.floor(z / pitch);
+      const street = tunnel ? 0 : 11;
+      const bz0 = blk * pitch;
+      const bz1 = Math.min(bz0 + pitch - street, boundary, chunk.z1);
+      const segEnd = Math.min(bz0 + pitch, boundary, chunk.z1);
+      if (z < bz1) {
+        for (const side of [-1, 1]) {
+          const br = new Rng(hash2(this.seed, 300_000 + blk * 2 + (side > 0 ? 1 : 0)));
+          const baseH = tunnel ? def.ceiling! + 1 : br.range(def.wallH[0], def.wallH[1]);
+          // lots réguliers : 2 à 4 par îlot
+          const lots = tunnel ? 1 : br.int(2, 4);
+          const lotLen = (pitch - street) / lots;
+          for (let li = 0; li < lots; li++) {
+            const lz0 = Math.max(z, bz0 + li * lotLen);
+            const lz1 = Math.min(bz1, bz0 + (li + 1) * lotLen - (tunnel ? 0 : 0.6));
+            const h = tunnel ? baseH : baseH * br.range(0.8, 1.15) * (li === 0 && br.chance(0.4) ? 1.4 : 1);
+            const depth = br.range(20, 34);
+            if (lz1 - lz0 < 1) continue;
+            const prr = this.pathRange(lz0 - 2, lz1 + 2);
+            const hw = Math.min(def.halfW, this.districtDef(lz1 - 0.01).halfW);
+            if (side < 0) {
+              const inner = prr.minX - hw;
+              add('wall', makeBox(inner - depth, 0, lz0, inner, h, lz1));
+              if (!tunnel) chunk.decor.push(makeBox(inner - depth - br.range(28, 46), 0, lz0, inner - depth - 3, h * br.range(1.1, 2) + 12, lz1));
+            } else {
+              const inner = prr.maxX + hw;
+              add('wall', makeBox(inner, 0, lz0, inner + depth, h, lz1));
+              if (!tunnel) chunk.decor.push(makeBox(inner + depth + 3, 0, lz0, inner + depth + br.range(28, 46), h * br.range(1.1, 2) + 12, lz1));
+            }
+            if (tunnel && side > 0) {
+              add('ceiling', makeBox(prr.minX - hw - 2, def.ceiling!, lz0, prr.maxX + hw + 2, def.ceiling! + 4, lz1));
+            }
           }
         }
-        if (tunnel && side > 0) {
-          add('ceiling', makeBox(pr.minX - halfW - 2, def.ceiling!, za, pr.maxX + halfW + 2, def.ceiling! + 4, zb));
-        }
-        // ruelles entre les immeubles (hors tunnel)
-        z = zb + (tunnel ? 0 : rng.chance(0.55) ? rng.range(2, 6) : 0);
       }
+      z = Math.max(segEnd, z + 0.5);
     }
   }
 
@@ -539,23 +642,116 @@ export class World {
     return options[0].b;
   }
 
-  private buildObstacles(
-    chunk: Chunk,
-    rng: Rng,
-    add: AddFn,
-    zStart: number,
-    zEnd: number,
-  ) {
-    let z = Math.max(zStart, chunk.z0 + rng.range(5, 25));
-    while (z < zEnd - 12) {
-      const def = this.districtDef(z);
-      const diff = difficulty(z);
-      const spacing = lerp(44, 15, diff) / def.density;
-      const tpl = rng.weighted(def.weights) as ObstacleTemplate;
-      const depth = this.placeTemplate(tpl, z, Math.min(zEnd, chunk.z1), def, rng, add);
-      z += depth + spacing * rng.range(0.65, 1.35);
+  private buildObstacles(chunk: Chunk, _rng: Rng, add: AddFn, zStart: number, zEnd: number) {
+    // on parcourt les séquences qui touchent ce tronçon et on pose leurs éléments
+    let seg = this.segmentAt(chunk.z0);
+    while (seg.z0 < zEnd) {
+      if (seg.pattern !== 'breather') {
+        const spacing = seg.lambda / 2;
+        for (let k = 0; ; k++) {
+          const z = seg.first + k * spacing;
+          if (z >= seg.z1 - 1) break;
+          if (z < Math.max(chunk.z0, zStart) || z >= zEnd - 10) continue;
+          const rng = new Rng(hash2(this.seed, seg.index * 131 + k * 7 + 1));
+          this.placeElement(seg, k, z, Math.min(zEnd, chunk.z1), rng, add);
+        }
+      }
+      seg = this.segmentAt(seg.z1 + 0.01);
     }
   }
+
+  /** Un élément d'une séquence (k = rang dans la séquence, pour alterner). */
+  private placeElement(seg: Segment, k: number, z: number, zMax: number, rng: Rng, add: AddFn) {
+    const def = this.districtDef(z);
+    const p = this.pathAt(z);
+    const halfW = def.halfW;
+    const pr = this.pathRange(z - 3, z + 8);
+    const L = pr.minX - halfW - 8;
+    const R = pr.maxX + halfW + 8;
+    const top = def.ceiling ?? 78;
+    const tpl = (t: ObstacleTemplate) => this.placeTemplate(t, z, zMax, def, rng, add);
+    switch (seg.pattern) {
+      case 'gates':
+        tpl(k % 2 === 0 ? 'holeSq' : 'holeV');
+        break;
+      case 'slots':
+        tpl('holeH');
+        break;
+      case 'lasers':
+        tpl('laser');
+        break;
+      case 'trains':
+        tpl('train');
+        break;
+      case 'doors':
+        tpl('door');
+        break;
+      case 'drones':
+        tpl('drone');
+        break;
+      case 'rotors':
+        this.rotorSide = k % 2;
+        tpl('rotor');
+        break;
+      case 'overunder': {
+        // mur bas (passer dessus) ou mur haut (passer dessous), en alternance
+        const d = 2.5;
+        const safe = this.safeBox(z, z + d);
+        if (k % 2 === 0) {
+          if (safe.minY > 1) add('slit', makeBox(L, 0, z, R, safe.minY, z + d));
+        } else add('slit', makeBox(L, safe.maxY, z, R, top, z + d));
+        break;
+      }
+      case 'columns': {
+        // forêt de colonnes en quinconce, alignées sur une grille
+        const pitch = 8;
+        for (let row = 0; row < 2; row++) {
+          const zz = z + row * (seg.lambda / 4);
+          if (zz + 3 > zMax) break;
+          const off = ((k * 2 + row) % 2) * (pitch / 2);
+          const h = def.ceiling ?? 110;
+          for (let x = Math.floor((L - p.x) / pitch) * pitch + p.x + off; x < R; x += pitch) {
+            const b = makeBox(x - 1.3, 0, zz, x + 1.3, h, zz + 2.6);
+            const c = this.carve(b, this.safeBox(b.minZ, b.maxZ), 'x', 0.8);
+            if (c) add('pillar', c);
+          }
+        }
+        break;
+      }
+      case 'blockwall': {
+        // mur de blocs avec une ouverture (et quelques blocs manquants)
+        const cell = 4.5;
+        const d = 3;
+        const safe = this.safeBox(z, z + d);
+        const yTop = Math.min(top, this.ceilingAt(z) + 3);
+        for (let x = L; x < R; x += cell)
+          for (let y = 0; y < yTop; y += cell) {
+            const b = makeBox(x + 0.25, y + 0.25, z, x + cell - 0.25, Math.min(yTop, y + cell) - 0.25, z + d);
+            if (boxesOverlap(b, safe)) continue;
+            if (rng.chance(0.08)) continue;
+            add('cube', b);
+          }
+        break;
+      }
+      case 'containers': {
+        // mur de conteneurs empilés, avec un passage
+        const d = 2.5;
+        const safe = this.safeBox(z, z + d);
+        const layers = rng.int(3, 5);
+        for (let l = 0; l < layers; l++) {
+          const shift = (l % 2) * 6;
+          for (let x = L - shift; x < R; x += 12.4) {
+            const b = makeBox(x, l * 2.6, z, x + 12, l * 2.6 + 2.55, z + d);
+            const c = this.carve(b, safe, 'x', 2);
+            if (c) add('container', c);
+          }
+        }
+        break;
+      }
+    }
+  }
+
+  private rotorSide = 0;
 
   /** Pose un gabarit d'obstacle à z. Retourne sa profondeur (m). */
   private placeTemplate(
@@ -662,7 +858,7 @@ export class World {
         return d + 6;
       }
       case 'rotor': {
-        const n = rng.chance(0.35) ? 2 : 1;
+        const n = 1;
         let zz = z;
         for (let i = 0; i < n; i++) {
           const dz = 1.4;
@@ -670,7 +866,7 @@ export class World {
           const pc = { x: (safe.minX + safe.maxX) / 2, y: (safe.minY + safe.maxY) / 2 };
           const gh = Math.max(safe.maxX - safe.minX, safe.maxY - safe.minY) / 2;
           // moyeu hors du tube libre ; la barre balaie tout le tube
-          const ang = rng.chance(0.6) ? rng.range(0.35, 2.8) : rng.chance(0.5) ? rng.range(-0.3, 0.3) : Math.PI + rng.range(-0.3, 0.3);
+          const ang = this.rotorSide === 0 ? rng.range(0.25, 0.6) : Math.PI - rng.range(0.25, 0.6);
           const dist = gh * 1.42 + 1.6 + rng.range(0, 3);
           const cx = pc.x + Math.cos(ang) * dist;
           let cy = pc.y + Math.sin(ang) * dist;

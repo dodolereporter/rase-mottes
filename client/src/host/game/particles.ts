@@ -40,7 +40,8 @@ export class Particles {
           vec4 mv = modelViewMatrix * vec4(position, 1.0);
           gl_PointSize = aSize * uScale / max(0.5, -mv.z);
           vColor = color;
-          vAlpha = aAlpha;
+          // estompe les particules trop proches de la caméra
+          vAlpha = aAlpha * smoothstep(2.0, 6.0, -mv.z);
           gl_Position = projectionMatrix * mv;
         }
       `,

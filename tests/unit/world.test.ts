@@ -72,7 +72,7 @@ describe('ville procédurale', () => {
     let prev = w.pathAt(0);
     for (let z = 1; z < 15000; z++) {
       const p = w.pathAt(z);
-      expect(Math.abs(p.x - prev.x)).toBeLessThan(0.3);
+      expect(Math.abs(p.x - prev.x)).toBeLessThan(0.4);
       prev = p;
     }
   });

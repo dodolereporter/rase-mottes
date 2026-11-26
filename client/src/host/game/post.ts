@@ -1,9 +1,10 @@
-import { Camera, Scene, ShaderMaterial, Vector2, Vector4, WebGLRenderer, WebGLRenderTarget } from 'three';
+import { Camera, Color, Scene, ShaderMaterial, Vector2, Vector4, WebGLRenderer, WebGLRenderTarget } from 'three';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { Pass } from 'three/addons/postprocessing/Pass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { FXAAShader } from 'three/addons/shaders/FXAAShader.js';
 
 export interface View {
   camera: Camera;
@@ -69,6 +70,7 @@ const FinalShader = {
     uFx: { value: [new Vector4(), new Vector4(), new Vector4(), new Vector4()] }, // speed, aberration, flash, -
     uFlashCol: { value: [new Vector4(1, 1, 1, 0), new Vector4(1, 1, 1, 0), new Vector4(1, 1, 1, 0), new Vector4(1, 1, 1, 0)] },
     uAspect: { value: 1 },
+    uGrade: { value: new Color(1, 1, 1) },
   },
   vertexShader: /* glsl */ `
     varying vec2 vUv;
@@ -82,6 +84,7 @@ const FinalShader = {
     uniform vec4 uFx[4];
     uniform vec4 uFlashCol[4];
     uniform float uAspect;
+    uniform vec3 uGrade;
     varying vec2 vUv;
     float hash(float p) { return fract(sin(p * 91.345) * 47453.5453); }
     void main() {
@@ -111,11 +114,14 @@ const FinalShader = {
       float h = hash(id);
       float streak = step(0.72, h) * smoothstep(0.32, 0.95, rad);
       float moving = step(0.55, fract(rad * 2.2 - uTime * (2.5 + h * 3.0) * (0.6 + fx.x)));
-      col += vec3(0.75, 0.9, 1.0) * streak * moving * fx.x * 0.35 * (1.0 - abs(fract(ang * 64.0) - 0.5) * 2.0);
+      col += vec3(0.75, 0.9, 1.0) * streak * moving * fx.x * 0.12 * (1.0 - abs(fract(ang * 64.0) - 0.5) * 2.0);
       // flash
-      col = mix(col, fc.rgb, fx.z * 0.55);
+      col = mix(col, fc.rgb * 2.0, fx.z * 0.5);
+      // étalonnage léger + grain
+      col *= uGrade;
+      col *= 1.0 + (hash(dot(vUv, vec2(12.9898, 78.233)) + uTime) - 0.5) * 0.03;
       // vignette
-      col *= 1.0 - smoothstep(0.55, 1.15, rad) * (0.55 + fx.x * 0.25);
+      col *= 1.0 - smoothstep(0.6, 1.3, rad) * (0.45 + fx.x * 0.2);
       gl_FragColor = vec4(col, 1.0);
     }
   `,
@@ -126,6 +132,7 @@ export class PostFX {
   multi: MultiViewPass;
   bloom: UnrealBloomPass;
   final: ShaderPass;
+  fxaa: ShaderPass;
 
   constructor(
     private renderer: WebGLRenderer,
@@ -135,11 +142,17 @@ export class PostFX {
     this.multi = new MultiViewPass(scene);
     this.composer.addPass(this.multi);
     const size = renderer.getSize(new Vector2());
-    this.bloom = new UnrealBloomPass(new Vector2(size.x / 2, size.y / 2), 0.45, 0.4, 0.85);
+    this.bloom = new UnrealBloomPass(new Vector2(size.x / 2, size.y / 2), 0.55, 0.45, 1.0);
     this.composer.addPass(this.bloom);
     this.final = new ShaderPass(FinalShader);
     this.composer.addPass(this.final);
     this.composer.addPass(new OutputPass());
+    this.fxaa = new ShaderPass(FXAAShader);
+    this.composer.addPass(this.fxaa);
+  }
+
+  setGrade(c: Color) {
+    (this.final.material as ShaderMaterial).uniforms.uGrade.value.copy(c);
   }
 
   setSize(w: number, h: number, pixelRatio: number) {
@@ -147,6 +160,7 @@ export class PostFX {
     this.composer.setSize(w, h);
     this.bloom.resolution.set((w * pixelRatio) / 2, (h * pixelRatio) / 2);
     (this.final.material as ShaderMaterial).uniforms.uAspect.value = w / h;
+    (this.fxaa.material as ShaderMaterial).uniforms.resolution.value.set(1 / (w * pixelRatio), 1 / (h * pixelRatio));
   }
 
   render(views: View[], time: number) {

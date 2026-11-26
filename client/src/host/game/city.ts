@@ -11,6 +11,7 @@ import {
   OctahedronGeometry,
   Quaternion,
   ShaderMaterial,
+  Material,
   TorusGeometry,
   Vector3,
 } from 'three';
@@ -18,7 +19,7 @@ import { Box } from '../../../../shared/collision';
 import { Chunk, Collider, World, moverOffset, rotorAngle } from '../../../../shared/world';
 import { Rng, hash2 } from '../../../../shared/prng';
 import { createGlowMaterial, createStructureMaterial } from './materials';
-import { KIND_CODE, PALETTES } from './palette';
+import { ATMOS, KIND_CODE } from './atmosphere';
 
 const STATIC_CAP = 1100;
 const MOVER_CAP = 80;
@@ -47,13 +48,15 @@ export function setBoxMatrix(mat: Matrix4, b: Box, offX = 0, offY = 0) {
   mat.compose(v, q, s);
 }
 
-function makeInstanced(cap: number, material: ShaderMaterial, dynamic: boolean): InstancedMesh {
+function makeInstanced(cap: number, material: Material, dynamic: boolean): InstancedMesh {
   const geo = boxGeo.clone();
   geo.setAttribute('aStyle', new InstancedBufferAttribute(new Float32Array(cap * 4), 4));
   geo.setAttribute('aColor', new InstancedBufferAttribute(new Float32Array(cap * 3), 3));
   const mesh = new InstancedMesh(geo, material, cap);
   mesh.count = 0;
   mesh.frustumCulled = false;
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
   if (dynamic) {
     mesh.instanceMatrix.setUsage(DynamicDrawUsage);
     (geo.getAttribute('aStyle') as InstancedBufferAttribute).setUsage(DynamicDrawUsage);
@@ -71,7 +74,7 @@ class ChunkView {
   moverList: Collider[] = [];
   rotorList: Collider[] = [];
 
-  constructor(material: ShaderMaterial, ringMat: ShaderMaterial, pickupMats: ShaderMaterial[], public world: World) {
+  constructor(material: Material, ringMat: ShaderMaterial, pickupMats: ShaderMaterial[], public world: World) {
     this.statics = makeInstanced(STATIC_CAP, material, false);
     this.movers = makeInstanced(MOVER_CAP, material, true);
     this.rings = new InstancedMesh(ringGeo, ringMat, RING_CAP);
@@ -90,7 +93,7 @@ class ChunkView {
 
   assign(chunk: Chunk) {
     this.chunk = chunk;
-    const pal = PALETTES[chunk.district];
+    const atm = ATMOS[chunk.district];
     const style = this.statics.geometry.getAttribute('aStyle') as InstancedBufferAttribute;
     const color = this.statics.geometry.getAttribute('aColor') as InstancedBufferAttribute;
     let n = 0;
@@ -100,10 +103,9 @@ class ChunkView {
       this.statics.setMatrixAt(n, m4);
       const code = KIND_CODE[kind] ?? 2;
       style.setXYZW(n, code, rnd, kind === 'wall' || kind === 'decor' ? (rnd > 0.3 ? 1 : 0.2) : 1, 1);
-      if (code === 0) tmpColor.copy(pal.building).lerp(TINTS[Math.floor(rnd * 997) % TINTS.length], 0.3).multiplyScalar(0.7 + ((rnd * 13.7) % 1) * 0.6);
+      if (code === 0) tmpColor.copy(atm.tints[Math.floor(rnd * 997) % atm.tints.length]).multiplyScalar(0.75 + ((rnd * 13.7) % 1) * 0.45);
       else if (code === 4) tmpColor.copy(CONTAINER_COLORS[Math.floor(rnd * CONTAINER_COLORS.length)]);
-      else if (code === 1) tmpColor.copy(pal.building).multiplyScalar(0.6);
-      else tmpColor.copy(pal.building).multiplyScalar(0.55).lerp(pal.neonA, 0.05);
+      else tmpColor.setRGB(0.5, 0.5, 0.5);
       color.setXYZ(n, tmpColor.r, tmpColor.g, tmpColor.b);
       n++;
     };
@@ -130,6 +132,18 @@ class ChunkView {
         if (rng.chance(0.4)) {
           put({ minX: b.minX + ix * 2, maxX: b.maxX - ix * 2, minZ: b.minZ + iz * 2, maxZ: b.maxZ - iz * 2, minY: top, maxY: top + th * 0.5 }, 'decor', rng.float());
           top += th * 0.5;
+        }
+      }
+      // équipements de toit : climatiseurs, réservoirs
+      if (w > 6 && d > 6) {
+        const nb = rng.int(1, 4);
+        for (let k = 0; k < nb; k++) {
+          const ew = rng.range(1.5, 4);
+          const ed = rng.range(1.5, 4);
+          const eh = rng.range(1, 3.5);
+          const ex = rng.range(b.minX + ew, Math.max(b.minX + ew + 0.1, b.maxX - ew));
+          const ez = rng.range(b.minZ + ed, Math.max(b.minZ + ed + 0.1, b.maxZ - ed));
+          put({ minX: ex - ew / 2, maxX: ex + ew / 2, minZ: ez - ed / 2, maxZ: ez + ed / 2, minY: b.maxY, maxY: b.maxY + eh }, 'roofbox', rng.float());
         }
       }
       if (h > 12 && rng.chance(0.45)) {
@@ -181,7 +195,7 @@ class ChunkView {
     this.moverList = this.moverList.slice(0, MOVER_CAP);
     this.moverList.forEach((c, i) => {
       mstyle.setXYZW(i, KIND_CODE[c.kind] ?? 2, c.style, 1, 1);
-      tmpColor.copy(pal.building).multiplyScalar(c.kind === 'train' ? 1.4 : 0.8);
+      tmpColor.setRGB(0.5, 0.5, 0.5);
       mcolor.setXYZ(i, tmpColor.r, tmpColor.g, tmpColor.b);
     });
     this.movers.count = this.moverList.length;

@@ -13,3 +13,7 @@
 - **Pseudo au clavier** : sans téléphone, le pseudo est « Pilote ».
 - **Docker** : `python3 make g++` sont installés dans les étapes de build, au cas où le binaire précompilé de `better-sqlite3` ne serait pas téléchargeable.
 - **WebRTC (étape 9, optionnelle)** : non fait. Sur un même Wi-Fi, la latence du WebSocket relayé reste faible, et le ping est affiché.
+- **Direction artistique (refonte)** : éclairage PBR (soleil + ciel + reflets de l'environnement), ombres portées, une heure du jour par quartier (coucher de soleil, brume ambrée, plein jour, nuit de tunnel, aube sur le port), routes dont les marquages suivent le tracé, eau animée au port. Tout reste procédural : aucun fichier externe.
+- **Caméra** : posée sur le décor. Elle suit l'axe de la rue et ne suit le missile que partiellement (30 à 60 % selon la largeur de la rue), donc c'est le missile qui se déplace dans l'image.
+- **Level design** : les obstacles viennent par séquences thématiques (slalom de portes, dessus/dessous, colonnes en quinconce, barres tournantes alternées, murs de blocs, conteneurs, lasers, portes, trains), séparées par des respirations avec anneaux. Le tracé ondule exprès pour rendre le slalom lisible, et l'écart entre éléments est calé sur le temps (~0,85 s → 0,5 s).
+- **Ville** : pâtés de maisons alignés des deux côtés, rues transversales, hauteurs cohérentes par îlot.
