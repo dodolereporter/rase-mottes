@@ -15,11 +15,12 @@ import {
   Vector3,
 } from 'three';
 import { Box } from '../../../../shared/collision';
-import { Chunk, Collider, World, moverOffset } from '../../../../shared/world';
+import { Chunk, Collider, World, moverOffset, rotorAngle } from '../../../../shared/world';
+import { Rng, hash2 } from '../../../../shared/prng';
 import { createGlowMaterial, createStructureMaterial } from './materials';
 import { KIND_CODE, PALETTES } from './palette';
 
-const STATIC_CAP = 700;
+const STATIC_CAP = 1100;
 const MOVER_CAP = 80;
 const RING_CAP = 40;
 const PICKUP_CAP = 8;
@@ -33,6 +34,7 @@ const q = new Quaternion();
 const v = new Vector3();
 const s = new Vector3();
 const tmpColor = new Color();
+const zAxis = new Vector3(0, 0, 1);
 
 const CONTAINER_COLORS = ['#7a2a1e', '#1e4a7a', '#2a6a3a', '#7a6a1e', '#5a5a64', '#7a3a5a'].map((h) => new Color(h));
 
@@ -66,8 +68,9 @@ class ChunkView {
   pickups: InstancedMesh[];
   chunk: Chunk | null = null;
   moverList: Collider[] = [];
+  rotorList: Collider[] = [];
 
-  constructor(material: ShaderMaterial, ringMat: ShaderMaterial, pickupMats: ShaderMaterial[]) {
+  constructor(material: ShaderMaterial, ringMat: ShaderMaterial, pickupMats: ShaderMaterial[], public world: World) {
     this.statics = makeInstanced(STATIC_CAP, material, false);
     this.movers = makeInstanced(MOVER_CAP, material, true);
     this.rings = new InstancedMesh(ringGeo, ringMat, RING_CAP);
@@ -104,11 +107,57 @@ class ChunkView {
       n++;
     };
     this.moverList = [];
+    this.rotorList = [];
     for (const c of chunk.colliders) {
-      if (c.mover) this.moverList.push(c);
+      if (c.mover || c.rotor) this.moverList.push(c);
       else put(c.box, c.kind, c.style);
     }
     chunk.decor.forEach((b, i) => put(b, 'decor', ((i * 0.618) % 1) * 0.9 + 0.05));
+    // habillage purement visuel : étages en retrait, enseignes, balises de toit
+    const rng = new Rng(hash2(this.world.seed, 900_000 + chunk.index));
+    const dressing = (b: Box, facade: boolean) => {
+      const h = b.maxY - b.minY;
+      const w = b.maxX - b.minX;
+      const d = b.maxZ - b.minZ;
+      let top = b.maxY;
+      if (h > 14 && rng.chance(0.55)) {
+        const ix = w * rng.range(0.12, 0.3);
+        const iz = d * rng.range(0.12, 0.3);
+        const th = h * rng.range(0.2, 0.6);
+        put({ minX: b.minX + ix, maxX: b.maxX - ix, minZ: b.minZ + iz, maxZ: b.maxZ - iz, minY: top, maxY: top + th }, 'decor', rng.float());
+        top += th;
+        if (rng.chance(0.4)) {
+          put({ minX: b.minX + ix * 2, maxX: b.maxX - ix * 2, minZ: b.minZ + iz * 2, maxZ: b.maxZ - iz * 2, minY: top, maxY: top + th * 0.5 }, 'decor', rng.float());
+          top += th * 0.5;
+        }
+      }
+      if (h > 12 && rng.chance(0.45)) {
+        const cx = (b.minX + b.maxX) / 2;
+        const cz = (b.minZ + b.maxZ) / 2;
+        put({ minX: cx - 0.15, maxX: cx + 0.15, minZ: cz - 0.15, maxZ: cz + 0.15, minY: top, maxY: top + 6 }, 'pillar', 0.2);
+        put({ minX: cx - 0.5, maxX: cx + 0.5, minZ: cz - 0.5, maxZ: cz + 0.5, minY: top + 6, maxY: top + 7 }, 'beacon', rng.float());
+      }
+      if (!facade || h < 9) return;
+      // enseigne sur la façade côté couloir
+      const pathX = this.world.pathAt((b.minZ + b.maxZ) / 2).x;
+      const left = (b.minX + b.maxX) / 2 < pathX;
+      const fx = left ? b.maxX : b.minX;
+      const out = left ? 0.25 : -0.25;
+      const x0 = Math.min(fx, fx + out);
+      const x1 = Math.max(fx, fx + out);
+      if (rng.chance(0.5)) {
+        const sz = rng.range(1.5, 3);
+        const sh = rng.range(5, Math.min(16, h - 3));
+        const sy = rng.range(3, Math.max(3.5, h - sh - 1));
+        const zc = rng.range(b.minZ + 2, Math.max(b.minZ + 2.5, b.maxZ - 2));
+        put({ minX: x0, maxX: x1, minY: sy, maxY: sy + sh, minZ: zc - sz / 2, maxZ: zc + sz / 2 }, 'sign', rng.float());
+      } else if (rng.chance(0.6)) {
+        const sy = rng.range(4, Math.max(4.5, h - 3));
+        put({ minX: x0, maxX: x1, minY: sy, maxY: sy + rng.range(0.8, 1.8), minZ: b.minZ + 1, maxZ: b.maxZ - 1 }, 'sign', rng.float());
+      }
+    };
+    for (const c of chunk.colliders) if (c.kind === 'wall') dressing(c.box, true);
+    for (const b of chunk.decor) dressing(b, false);
     this.statics.count = n;
     this.statics.instanceMatrix.needsUpdate = true;
     style.needsUpdate = true;
@@ -133,6 +182,15 @@ class ChunkView {
     if (!this.moverList.length) return;
     const mstyle = this.movers.geometry.getAttribute('aStyle') as InstancedBufferAttribute;
     this.moverList.forEach((c, i) => {
+      if (c.rotor) {
+        const r = c.rotor;
+        v.set(r.cx, r.cy, -(c.box.minZ + c.box.maxZ) / 2);
+        q.setFromAxisAngle(zAxis, rotorAngle(r, t));
+        s.set(r.halfLen * 2, r.halfThick * 2, c.box.maxZ - c.box.minZ);
+        m4.compose(v, q, s);
+        this.movers.setMatrixAt(i, m4);
+        return;
+      }
       const { off, active } = moverOffset(c.mover!, t);
       setBoxMatrix(m4, c.box, c.mover!.axis === 'x' ? off : 0, c.mover!.axis === 'y' ? off : 0);
       this.movers.setMatrixAt(i, m4);
@@ -195,7 +253,8 @@ export class CityRenderer {
   }
 
   private acquire(): ChunkView {
-    const view = this.pool.pop() ?? new ChunkView(this.material, this.ringMat, this.pickupMats);
+    const view = this.pool.pop() ?? new ChunkView(this.material, this.ringMat, this.pickupMats, this.world);
+    view.world = this.world;
     if (!view.group.parent) this.group.add(view.group);
     return view;
   }

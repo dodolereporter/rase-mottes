@@ -48,12 +48,24 @@ export function deviceQuat(alpha: number, beta: number, gamma: number, screenAng
  * roulis > 0 : on tourne le « volant » vers la droite (sens horaire vu par le joueur).
  * tangage > 0 : on bascule le haut de l'écran vers l'avant (loin du joueur).
  */
-export function relativePitchRoll(qRef: Quat, q: Quat): { pitch: number; roll: number } {
+export function relativePitchRoll(qRef: Quat, q: Quat): { pitch: number; roll: number; yaw: number } {
   const rel = quatMul(quatConj(qRef), q);
   const up = rotateVec(rel, [0, 1, 0]);
   const roll = Math.atan2(up[0], up[1]) / DEG;
   const pitch = Math.asin(Math.max(-1, Math.min(1, -up[2]))) / DEG;
-  return { pitch, roll };
+  // cap : direction visée par le dos du téléphone (comme un pointeur), indépendante du roulis
+  const fwd = rotateVec(rel, [0, 0, -1]);
+  const yaw = Math.atan2(fwd[0], -fwd[2]) / DEG;
+  return { pitch, roll, yaw };
+}
+
+export type SteerStyle = 'both' | 'wheel' | 'aim';
+
+/** Angle de direction (deg) selon le style choisi : volant (roulis), visée (cap) ou les deux. */
+export function steerAngle(r: { roll: number; yaw: number }, style: SteerStyle): number {
+  if (style === 'wheel') return r.roll;
+  if (style === 'aim') return r.yaw * 1.3;
+  return r.roll + r.yaw * 1.3;
 }
 
 export interface AxisSettings {
@@ -62,7 +74,7 @@ export interface AxisSettings {
   invertY: boolean;
 }
 
-const MAX_ANGLE = 45;
+const MAX_ANGLE = 40;
 
 /** Angle (deg) -> axe normalisé [-1, 1] avec zone morte et sensibilité. */
 export function shapeAxis(deg: number, s: AxisSettings): number {

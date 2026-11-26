@@ -13,6 +13,7 @@ import {
   baseSpeed,
   clamp,
   colliderBoxAt,
+  rotorAngle,
 } from './world';
 
 export const SIM_HZ = 120;
@@ -105,7 +106,7 @@ export class Pilot {
     return this.slowmoT > 0 ? 0.6 : 1;
   }
   get latMax(): number {
-    return Math.min(0.6 * this.speed, 125);
+    return Math.min(0.6 * this.speed, 175);
   }
   get distance(): number {
     return this.z;
@@ -156,7 +157,7 @@ export class Pilot {
 
     // pilotage latéral / vertical : réponse quasi immédiate
     const lm = this.latMax;
-    const k = 1 - Math.exp(-dt / 0.055);
+    const k = 1 - Math.exp(-dt / 0.04);
     this.vx += (clamp(input.x, -1, 1) * lm - this.vx) * k;
     this.vy += (clamp(input.y, -1, 1) * lm * 0.75 - this.vy) * k;
 
@@ -176,8 +177,9 @@ export class Pilot {
       nx = path.x + hw;
       this.vx = Math.min(this.vx, 0);
     }
-    if (ny > SOFT_CEILING) {
-      ny = SOFT_CEILING;
+    const ceil = Math.min(SOFT_CEILING, this.world.ceilingAt(nz)) - MISSILE_RADIUS;
+    if (ny > ceil) {
+      ny = ceil;
       this.vy = Math.min(this.vy, 0);
     }
     const p1: Vec3 = { x: nx, y: ny, z: nz };
@@ -202,8 +204,24 @@ export class Pilot {
     const zHi = Math.max(p0.z, p1.z) + GRAZE_DIST + 1;
     let hitT = -1;
     for (const { c, box } of this.candidates(zLo, zHi, t)) {
+      // barre tournante : on se place dans son repère local (rotation autour de z)
+      let q0 = p0;
+      let q1 = p1;
+      if (c.rotor) {
+        const r = c.rotor;
+        const a = rotorAngle(r, t);
+        const cs = Math.cos(a);
+        const sn = Math.sin(a);
+        const loc = (p: Vec3): Vec3 => {
+          const dx = p.x - r.cx;
+          const dy = p.y - r.cy;
+          return { x: r.cx + dx * cs + dy * sn, y: r.cy - dx * sn + dy * cs, z: p.z };
+        };
+        q0 = loc(p0);
+        q1 = loc(p1);
+      }
       if (this.invulnT <= 0) {
-        const h = sweptCapsuleBox(p0, p1, MISSILE_RADIUS, box);
+        const h = sweptCapsuleBox(q0, q1, MISSILE_RADIUS, box);
         if (h >= 0) {
           if (hitT < 0 || h < hitT) hitT = h;
           continue;
@@ -213,15 +231,15 @@ export class Pilot {
         // filtre grossier avant le calcul précis
         const m = GRAZE_DIST + MISSILE_RADIUS;
         if (
-          box.maxX < Math.min(p0.x, p1.x) - m ||
-          box.minX > Math.max(p0.x, p1.x) + m ||
-          box.maxY < Math.min(p0.y, p1.y) - m ||
-          box.minY > Math.max(p0.y, p1.y) + m ||
-          box.maxZ < p0.z - m ||
-          box.minZ > p1.z + m
+          box.maxX < Math.min(q0.x, q1.x) - m ||
+          box.minX > Math.max(q0.x, q1.x) + m ||
+          box.maxY < Math.min(q0.y, q1.y) - m ||
+          box.minY > Math.max(q0.y, q1.y) + m ||
+          box.maxZ < q0.z - m ||
+          box.minZ > q1.z + m
         )
           continue;
-        const dist = segmentBoxDistance(p0, p1, box) - MISSILE_RADIUS;
+        const dist = segmentBoxDistance(q0, q1, box) - MISSILE_RADIUS;
         if (dist < GRAZE_DIST) {
           this.grazed.add(c.id);
           const cx = (box.minX + box.maxX) / 2;

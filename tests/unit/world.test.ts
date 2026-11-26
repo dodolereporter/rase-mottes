@@ -1,6 +1,28 @@
 import { describe, expect, it } from 'vitest';
 import { boxesOverlap, makeBox } from '../../shared/collision';
-import { CHUNK_LEN, World, minGap } from '../../shared/world';
+import { CHUNK_LEN, Collider, MISSILE_RADIUS, World, minGap, rotorAngle } from '../../shared/world';
+
+/** À tout instant, il reste dans le tube un point où le missile passe à côté de la barre. */
+function rotorPassable(col: Collider, p: { x: number; y: number }, g: number): boolean {
+  const r = col.rotor!;
+  if (Math.abs(r.cx - p.x) < g + 1.1 && Math.abs(r.cy - p.y) < g + 1.1 && Math.hypot(r.cx - p.x, r.cy - p.y) < g) return false;
+  const inner = g - MISSILE_RADIUS;
+  for (let k = 0; k < 36; k++) {
+    const a = rotorAngle(r, (k / 36) * ((Math.PI * 2) / Math.abs(r.omega)));
+    const nx = -Math.sin(a);
+    const ny = Math.cos(a);
+    let ok = false;
+    for (let i = -6; i <= 6 && !ok; i++)
+      for (let j = -6; j <= 6 && !ok; j++) {
+        const x = p.x + (i / 6) * inner;
+        const y = p.y + (j / 6) * inner;
+        // distance à la droite de la barre (la barre dépasse toujours du tube)
+        if (Math.abs((x - r.cx) * nx + (y - r.cy) * ny) > r.halfThick + MISSILE_RADIUS + 0.2) ok = true;
+      }
+    if (!ok) return false;
+  }
+  return true;
+}
 
 /** Vérifie qu'en tout point du chemin, le tube libre de largeur minGap n'empiète sur aucun obstacle. */
 function checkSeed(seed: number, chunks: number): string | null {
@@ -13,6 +35,10 @@ function checkSeed(seed: number, chunks: number): string | null {
       const tube = makeBox(p.x - g, p.y - g, z, p.x + g, p.y + g, z + 1e-3);
       if (tube.minY < 0) return `seed ${seed} z=${z}: tube sous le sol (y=${p.y.toFixed(2)})`;
       for (const col of c.colliders) {
+        if (col.rotor) {
+          if (z >= col.box.minZ && z <= col.box.maxZ && !rotorPassable(col, p, g)) return `seed ${seed} z=${z}: barre tournante infranchissable`;
+          continue;
+        }
         if (boxesOverlap(tube, col.swept))
           return `seed ${seed} z=${z}: ${col.kind} bloque le passage (${JSON.stringify(col.swept)}) path=${p.x.toFixed(1)},${p.y.toFixed(1)}`;
       }

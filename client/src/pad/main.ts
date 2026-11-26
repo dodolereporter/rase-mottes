@@ -12,7 +12,7 @@ import {
   encodeInput,
   sanitizeName,
 } from '../../../shared/protocol';
-import { AxisSettings, Quat, deviceQuat, relativePitchRoll, shapeAxis } from './orientation';
+import { AxisSettings, Quat, SteerStyle, deviceQuat, relativePitchRoll, shapeAxis, steerAngle } from './orientation';
 
 // ---------------------------------------------------------------------------
 // État
@@ -24,9 +24,10 @@ const app = document.getElementById('app')!;
 
 interface Settings extends AxisSettings {
   vibrate: boolean;
+  steer: SteerStyle;
 }
 const SETTINGS_KEY = 'rm_pad_settings';
-const settings: Settings = { sensitivity: 1, deadZone: 0.06, invertY: false, vibrate: true };
+const settings: Settings = { sensitivity: 1.15, deadZone: 0.04, invertY: false, vibrate: true, steer: 'both' };
 try {
   Object.assign(settings, JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? '{}'));
 } catch {
@@ -77,6 +78,21 @@ const screenAngle = () =>
     ? screen.orientation.angle
     : ((window as unknown as { orientation?: number }).orientation ?? 0)) || 0;
 
+// Angle d'écran figé : si le système fait pivoter l'écran en cours de jeu,
+// les commandes ne bougent pas et l'interface est contre-tournée (fixe par rapport au téléphone).
+let lockAngle = screenAngle();
+
+function applyUiRotation() {
+  const rot = (((lockAngle - screenAngle()) % 360) + 360) % 360;
+  const st = app.style;
+  if (rot === 0) {
+    st.cssText = '';
+    return;
+  }
+  const swap = rot === 90 || rot === 270;
+  st.cssText = `position:fixed;left:50%;top:50%;inset:auto;width:${swap ? '100vh' : '100vw'};height:${swap ? '100vw' : '100vh'};transform:translate(-50%,-50%) rotate(${rot}deg);`;
+}
+
 function recenter() {
   if (qCur) qRef = [...qCur] as Quat;
   vibrate(12);
@@ -85,10 +101,10 @@ function recenter() {
 function onOrientation(e: DeviceOrientationEvent) {
   if (e.beta === null || e.gamma === null) return;
   gotSensor = true;
-  qCur = deviceQuat(e.alpha ?? 0, e.beta, e.gamma, screenAngle());
+  qCur = deviceQuat(e.alpha ?? 0, e.beta, e.gamma, lockAngle);
   if (!qRef) qRef = [...qCur] as Quat;
   const r = relativePitchRoll(qRef, qCur);
-  roll = shapeAxis(r.roll, settings);
+  roll = shapeAxis(steerAngle(r, settings.steer), settings);
   // tangage vers l'avant = piquer (axe vertical négatif), sauf inversion
   pitch = shapeAxis(-r.pitch, settings) * (settings.invertY ? -1 : 1);
 }
@@ -110,7 +126,7 @@ function renderJoin(message = '', bad = false) {
   app.innerHTML = `
     <div class="join">
       <h1>RASE-MOTTES</h1>
-      <div class="hint">Tiens le téléphone à l'horizontale, à deux mains, comme un volant.</div>
+      <div class="hint">Tiens le téléphone à l'horizontale, à deux mains. Tourne-le comme un volant ou pointe-le : le missile suit son orientation.</div>
       <div class="row">
         <div class="field"><label for="room">Code du salon</label>
           <input id="room" maxlength="4" autocapitalize="characters" autocomplete="off" value="${roomCode}" /></div>
@@ -301,6 +317,11 @@ function onServerMessage(m: ServerToPad | HostToPad) {
         ready = m.ready;
         // calibration automatique au début de chaque manche
         if (m.phase === 'countdown' && prev !== 'countdown') recenter();
+        if (!inGame() && lockAngle !== screenAngle()) {
+          lockAngle = screenAngle();
+          recenter();
+          applyUiRotation();
+        }
         updateMenu(m.info);
         updateBar();
       }
@@ -603,6 +624,12 @@ function openSettings() {
       <input type="range" id="sens" min="0.5" max="2" step="0.05" value="${settings.sensitivity}" /></div>
     <div class="opt"><span>Zone morte</span><span id="vdz">${Math.round(settings.deadZone * 100)} %</span>
       <input type="range" id="dz" min="0" max="0.25" step="0.01" value="${settings.deadZone}" /></div>
+    <div class="opt"><span>Direction</span>
+      <select id="steer" style="font-size:16px;padding:6px;border-radius:8px;background:#1a1830;color:#fff">
+        <option value="both" ${settings.steer === 'both' ? 'selected' : ''}>Volant + visée</option>
+        <option value="wheel" ${settings.steer === 'wheel' ? 'selected' : ''}>Volant (tourner)</option>
+        <option value="aim" ${settings.steer === 'aim' ? 'selected' : ''}>Visée (pointer)</option>
+      </select></div>
     <label class="opt"><span>Inverser l'axe vertical</span><input type="checkbox" id="inv" ${settings.invertY ? 'checked' : ''} /></label>
     <label class="opt"><span>Vibrations ${'vibrate' in navigator ? '' : '(non disponibles ici)'}</span><input type="checkbox" id="vib" ${settings.vibrate ? 'checked' : ''} /></label>
     <button class="primary big" id="close">Fermer</button>`;
@@ -626,12 +653,28 @@ function openSettings() {
     settings.vibrate = (e.target as HTMLInputElement).checked;
     saveSettings();
   };
+  (document.getElementById('steer') as HTMLSelectElement).onchange = (e) => {
+    settings.steer = (e.target as HTMLSelectElement).value as SteerStyle;
+    saveSettings();
+    recenter();
+  };
   document.getElementById('close')!.onclick = () => (s.hidden = true);
 }
 
 // l'orientation d'écran change : les axes changent, on recentre
-screen.orientation?.addEventListener?.('change', () => setTimeout(recenter, 200));
-window.addEventListener('orientationchange', () => setTimeout(recenter, 200));
+const inGame = () => phase === 'countdown' || phase === 'playing' || phase === 'paused';
+const onRotate = () =>
+  setTimeout(() => {
+    // hors manche, on suit l'écran normalement ; en manche, tout reste figé
+    if (!inGame() && lockAngle !== screenAngle()) {
+      lockAngle = screenAngle();
+      recenter();
+    }
+    applyUiRotation();
+  }, 50);
+screen.orientation?.addEventListener?.('change', onRotate);
+window.addEventListener('orientationchange', onRotate);
+window.addEventListener('resize', onRotate);
 // pas de zoom par geste (iOS)
 document.addEventListener('gesturestart', (e) => e.preventDefault());
 document.addEventListener('dblclick', (e) => e.preventDefault());

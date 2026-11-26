@@ -15,7 +15,9 @@ export const PATH_STEP = 10;
 export const CELL_LEN = 20;
 export const CELLS_PER_CHUNK = CHUNK_LEN / CELL_LEN;
 export const GROUND_Y = 0;
-export const SOFT_CEILING = 70;
+export const SOFT_CEILING = 60;
+/** Hauteur du plafond du couloir au-dessus du chemin : impossible de survoler les obstacles. */
+export const CEIL_ABOVE_PATH = 12.5;
 export const MISSILE_RADIUS = 0.7;
 /** Marge de chemin prise de part et d'autre d'un obstacle pour le tube libre. */
 const SAFE_MARGIN_Z = 4;
@@ -42,6 +44,11 @@ export interface DistrictDef {
 }
 
 export type ObstacleTemplate =
+  | 'holeH'
+  | 'holeV'
+  | 'holeSq'
+  | 'rotor'
+  | 'cubes'
   | 'beam'
   | 'pillar'
   | 'block'
@@ -62,7 +69,7 @@ export const DISTRICTS: DistrictDef[] = [
     maxSlope: 0.24,
     wallH: [25, 85],
     density: 1,
-    weights: { beam: 3, pillar: 2, block: 3, slit: 1, drone: 2, laser: 1.5 },
+    weights: { holeH: 2.2, holeV: 2.2, holeSq: 1.8, rotor: 1.6, cubes: 2, beam: 1.5, pillar: 1.5, drone: 1.2, laser: 1.2 },
   },
   {
     halfW: 22,
@@ -71,16 +78,16 @@ export const DISTRICTS: DistrictDef[] = [
     maxSlope: 0.24,
     wallH: [8, 24],
     density: 1,
-    weights: { beam: 4, pillar: 3, slit: 0.6, crane: 1.6, train: 1.6, block: 1 },
+    weights: { holeH: 1.6, holeV: 1.6, holeSq: 1.2, rotor: 2, beam: 2.5, pillar: 2, crane: 1.4, train: 1.4, cubes: 1 },
   },
   {
     halfW: 10,
     yMin: 12,
-    yMax: 40,
+    yMax: 30,
     maxSlope: 0.14,
     wallH: [90, 230],
     density: 0.9,
-    weights: { beam: 4, slit: 2, block: 2, pillar: 1, drone: 1 },
+    weights: { holeH: 2.5, holeV: 2, holeSq: 2.5, rotor: 1.5, beam: 2, cubes: 1.5, drone: 1 },
   },
   {
     halfW: 10,
@@ -90,7 +97,7 @@ export const DISTRICTS: DistrictDef[] = [
     wallH: [17, 17],
     ceiling: 17,
     density: 1.05,
-    weights: { pillar: 3, block: 2, door: 2.2, laser: 2, slit: 1.5, beam: 1 },
+    weights: { holeSq: 2, holeH: 1.5, holeV: 1.5, rotor: 1.8, pillar: 2, block: 1.5, door: 2, laser: 1.6 },
   },
   {
     halfW: 28,
@@ -99,11 +106,14 @@ export const DISTRICTS: DistrictDef[] = [
     maxSlope: 0.24,
     wallH: [3, 9],
     density: 1,
-    weights: { containers: 4, gantry: 2, crane: 2, beam: 1, train: 1.2, pillar: 1 },
+    weights: { containers: 3, holeH: 1.5, holeV: 1.2, holeSq: 1, rotor: 1.4, gantry: 1.5, crane: 1.5, train: 1.2, cubes: 1 },
   },
 ];
 
 export type ObstacleKind =
+  | 'rotor'
+  | 'hub'
+  | 'cube'
   | 'wall'
   | 'decor'
   | 'ceiling'
@@ -118,6 +128,20 @@ export type ObstacleKind =
   | 'laser'
   | 'crane'
   | 'door';
+
+/** Barre tournante autour de l'axe z (moyeu en cx, cy). */
+export interface Rotor {
+  cx: number;
+  cy: number;
+  halfLen: number;
+  halfThick: number;
+  omega: number; // rad/s
+  phase: number;
+}
+
+export function rotorAngle(r: Rotor, t: number): number {
+  return r.phase + r.omega * t;
+}
 
 export type MoveMode = 'sine' | 'loop' | 'blink' | 'door';
 
@@ -137,6 +161,7 @@ export interface Collider {
   swept: Box; // enveloppe de tout le mouvement (= box pour un statique)
   mover?: Mover;
   style: number; // [0, 1) pour la variation visuelle
+  rotor?: Rotor;
 }
 
 export type PickupType = 'shield' | 'slowmo' | 'magnet';
@@ -184,7 +209,8 @@ export function minGap(z: number): number {
 }
 /** Vitesse de croisière (m/s) en fonction de la distance. */
 export function baseSpeed(z: number): number {
-  return 60 + 175 * (1 - Math.exp(-z / 7000));
+  // accélère tout au long de la partie (≈ 300 m/s vers 14 km)
+  return Math.min(320, 62 + 0.0175 * z);
 }
 
 /** Position d'un mobile au temps t (décalage le long de son axe), et actif ou non. */
@@ -258,6 +284,8 @@ function sweptOf(box: Box, m: Mover): Box {
   }
   return s;
 }
+
+type AddFn = (k: ObstacleKind, b: Box, m?: Mover, r?: Rotor) => void;
 
 // ---------------------------------------------------------------------------
 
@@ -350,6 +378,12 @@ export class World {
     }
   }
 
+  /** Plafond du couloir (suit le chemin, plafonné). */
+  ceilingAt(z: number): number {
+    const def = this.districtDef(z);
+    return Math.min(def.ceiling ?? SOFT_CEILING, this.pathAt(z).y + CEIL_ABOVE_PATH);
+  }
+
   pathAt(z: number): { x: number; y: number } {
     const zz = Math.max(0, z);
     this.extendPath(zz + PATH_STEP * 2);
@@ -423,12 +457,16 @@ export class World {
       grid: Array.from({ length: CELLS_PER_CHUNK }, () => []),
     };
     let nextId = index * 10000;
-    const add = (kind: ObstacleKind, box: Box, mover?: Mover) => {
+    const add: AddFn = (kind, box, mover, rotor) => {
       if (box.maxZ > z1) box.maxZ = z1;
       if (box.minZ < z0) box.minZ = z0;
       if (box.maxZ - box.minZ < 0.3) return;
-      const swept = mover ? sweptOf(box, mover) : box;
-      chunk.colliders.push({ id: nextId++, kind, box, swept, mover, style: rng.float() });
+      let swept = mover ? sweptOf(box, mover) : box;
+      if (rotor) {
+        const r = rotor.halfLen + rotor.halfThick;
+        swept = makeBox(rotor.cx - r, rotor.cy - r, box.minZ, rotor.cx + r, rotor.cy + r, box.maxZ);
+      }
+      chunk.colliders.push({ id: nextId++, kind, box, swept, mover, rotor, style: rng.float() });
     };
 
     this.buildWalls(chunk, rng, add);
@@ -444,7 +482,7 @@ export class World {
     return chunk;
   }
 
-  private buildWalls(chunk: Chunk, rng: Rng, add: (k: ObstacleKind, b: Box, m?: Mover) => void) {
+  private buildWalls(chunk: Chunk, rng: Rng, add: AddFn) {
     for (const side of [-1, 1]) {
       let z = chunk.z0;
       while (z < chunk.z1) {
@@ -504,7 +542,7 @@ export class World {
   private buildObstacles(
     chunk: Chunk,
     rng: Rng,
-    add: (k: ObstacleKind, b: Box, m?: Mover) => void,
+    add: AddFn,
     zStart: number,
     zEnd: number,
   ) {
@@ -512,7 +550,7 @@ export class World {
     while (z < zEnd - 12) {
       const def = this.districtDef(z);
       const diff = difficulty(z);
-      const spacing = lerp(58, 24, diff) / def.density;
+      const spacing = lerp(44, 15, diff) / def.density;
       const tpl = rng.weighted(def.weights) as ObstacleTemplate;
       const depth = this.placeTemplate(tpl, z, Math.min(zEnd, chunk.z1), def, rng, add);
       z += depth + spacing * rng.range(0.65, 1.35);
@@ -526,7 +564,7 @@ export class World {
     zMax: number,
     def: DistrictDef,
     rng: Rng,
-    add: (k: ObstacleKind, b: Box, m?: Mover) => void,
+    add: AddFn,
   ): number {
     const p = this.pathAt(z);
     const halfW = def.halfW;
@@ -547,6 +585,7 @@ export class World {
       return true;
     };
     const g = minGap(z);
+    const addRotor = (b: Box, r: Rotor) => add('rotor', b, undefined, r);
 
     switch (tpl) {
       case 'beam': {
@@ -584,6 +623,88 @@ export class World {
           d = Math.max(d, zz + dd - z);
         }
         return d;
+      }
+      case 'holeH':
+      case 'holeV':
+      case 'holeSq': {
+        // mur plein, percé d'un trou qui contient toujours le tube libre
+        const d = rng.range(1.5, 3);
+        const safe = this.safeBox(z, z + d);
+        const pr = this.pathRange(z - 2, z + d + 2);
+        const WL = pr.minX - halfW - 8;
+        const WR = pr.maxX + halfW + 8;
+        const top = def.ceiling ?? 78;
+        let ex0: number, ex1: number, ey0: number, ey1: number;
+        if (tpl === 'holeH') {
+          ex0 = rng.range(4, 14);
+          ex1 = rng.range(4, 14);
+          ey0 = rng.range(0, 0.8);
+          ey1 = rng.range(0, 0.8);
+        } else if (tpl === 'holeV') {
+          ex0 = rng.range(0, 0.8);
+          ex1 = rng.range(0, 0.8);
+          ey0 = rng.range(3, 12);
+          ey1 = rng.range(3, 12);
+        } else {
+          ex0 = rng.range(0, 1.2);
+          ex1 = rng.range(0, 1.2);
+          ey0 = rng.range(0, 1.2);
+          ey1 = rng.range(0, 1.2);
+        }
+        const hx0 = safe.minX - ex0;
+        const hx1 = safe.maxX + ex1;
+        const hy0 = Math.max(0, safe.minY - ey0);
+        const hy1 = Math.min(top, safe.maxY + ey1);
+        add('slit', makeBox(WL, 0, z, hx0, top, z + d));
+        add('slit', makeBox(hx1, 0, z, WR, top, z + d));
+        if (hy0 > 0.4) add('slit', makeBox(hx0, 0, z, hx1, hy0, z + d));
+        if (top - hy1 > 0.4) add('slit', makeBox(hx0, hy1, z, hx1, top, z + d));
+        return d + 6;
+      }
+      case 'rotor': {
+        const n = rng.chance(0.35) ? 2 : 1;
+        let zz = z;
+        for (let i = 0; i < n; i++) {
+          const dz = 1.4;
+          const safe = this.safeBox(zz, zz + dz);
+          const pc = { x: (safe.minX + safe.maxX) / 2, y: (safe.minY + safe.maxY) / 2 };
+          const gh = Math.max(safe.maxX - safe.minX, safe.maxY - safe.minY) / 2;
+          // moyeu hors du tube libre ; la barre balaie tout le tube
+          const ang = rng.chance(0.6) ? rng.range(0.35, 2.8) : rng.chance(0.5) ? rng.range(-0.3, 0.3) : Math.PI + rng.range(-0.3, 0.3);
+          const dist = gh * 1.42 + 1.6 + rng.range(0, 3);
+          const cx = pc.x + Math.cos(ang) * dist;
+          let cy = pc.y + Math.sin(ang) * dist;
+          if (cy > ceil - 1.5) cy = ceil - 1.5;
+          const halfLen = dist + gh + rng.range(2, 6);
+          const rotor: Rotor = {
+            cx,
+            cy,
+            halfLen,
+            halfThick: 0.5,
+            omega: (rng.chance(0.5) ? 1 : -1) * lerp(1.1, 2.3, difficulty(z)) * rng.range(0.85, 1.15),
+            phase: rng.float() * Math.PI * 2,
+          };
+          const hub = makeBox(cx - 1.1, cy - 1.1, zz - 0.3, cx + 1.1, cy + 1.1, zz + dz + 0.3);
+          if (boxesOverlap(hub, safe)) continue;
+          add('hub', hub);
+          const bar = makeBox(cx - halfLen, cy - rotor.halfThick, zz, cx + halfLen, cy + rotor.halfThick, zz + dz);
+          addRotor(bar, rotor);
+          zz += rng.range(10, 18);
+        }
+        return zz - z + 2;
+      }
+      case 'cubes': {
+        const n = rng.int(3, 7);
+        let dmax = 0;
+        for (let i = 0; i < n; i++) {
+          const sz = rng.range(2.5, 6);
+          const cx = p.x + rng.range(-halfW * 0.9, halfW * 0.9);
+          const cy = clamp(p.y + rng.range(-9, 9), sz / 2 + 0.5, ceil - sz / 2 - 0.5);
+          const zz = z + rng.range(0, 22);
+          put('cube', makeBox(cx - sz / 2, cy - sz / 2, zz, cx + sz / 2, cy + sz / 2, zz + sz), 'xy');
+          dmax = Math.max(dmax, zz + sz - z);
+        }
+        return dmax;
       }
       case 'slit': {
         // mur percé d'une ouverture qui contient le tube libre

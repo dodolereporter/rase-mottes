@@ -104,8 +104,8 @@ export class ScoreStore {
     const elapsed = (now - tok.t) / 1000;
     if (elapsed < 0 || elapsed > 6 * 3600) return { ok: false, error: 'token_expired' };
     if (duration > elapsed + 2) return { ok: false, error: 'bad_duration' };
-    // vitesse max ≈ 235 m/s × 1,5 (boost) : on laisse une marge
-    if (distance > duration * 360 + 50) return { ok: false, error: 'bad_distance' };
+    // vitesse max = 320 m/s × 1,5 (boost) : on laisse une marge
+    if (distance > duration * 490 + 50) return { ok: false, error: 'bad_distance' };
     // vitesse min : 60 m/s × 0,55 (aérofrein) × 0,6 (ralenti)
     if (distance < duration * 15 - 50) return { ok: false, error: 'bad_distance' };
     // score : distance ×2 au plus + bonus plafonnés

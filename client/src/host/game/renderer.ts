@@ -20,7 +20,7 @@ import { Box } from '../../../../shared/collision';
 import { Pilot } from '../../../../shared/sim';
 import { CHUNK_LEN, DISTRICT_LEN, World, clamp } from '../../../../shared/world';
 import { CityRenderer } from './city';
-import { ambient, createGroundMaterial, createSkyMaterial } from './materials';
+import { ambient, createCeilingMaterial, createGroundMaterial, createSkyMaterial } from './materials';
 import { createMissile } from './missile';
 import { PALETTES, Palette, mixPalette } from './palette';
 import { Particles } from './particles';
@@ -67,6 +67,8 @@ export class GameRenderer {
   private ground: Mesh;
   private groundMat = createGroundMaterial();
   private debugLines: LineSegments | null = null;
+  private ceiling: Mesh;
+  private ceilingMat = createCeilingMaterial();
   private width = 1;
   private height = 1;
   quality = 0;
@@ -99,6 +101,12 @@ export class GameRenderer {
     this.ground.frustumCulled = false;
     this.scene.add(this.ground);
     this.scene.add(this.particles.points);
+
+    this.ceiling = new Mesh(new PlaneGeometry(300, 1400), this.ceilingMat);
+    this.ceiling.rotation.x = -Math.PI / 2;
+    this.ceiling.frustumCulled = false;
+    this.ceiling.renderOrder = 5;
+    this.scene.add(this.ceiling);
 
     if (debug) {
       const geo = new BufferGeometry();
@@ -285,7 +293,9 @@ export class GameRenderer {
       const targetBank = -clamp(p.vx / lm, -1, 1) * 0.95;
       v.bank += (targetBank - v.bank) * (1 - Math.exp(-realDt * 14));
       v.missile.position.set(x, y, -z);
-      v.missile.rotation.set(clamp(p.vy / lm, -1, 1) * 0.35, -clamp(p.vx / lm, -1, 1) * 0.25, v.bank, 'YXZ');
+      // le nez pointe dans la direction de vol réelle (cap et assiette pilotés par le téléphone)
+      const fwd = Math.max(p.speed, 1);
+      v.missile.rotation.set(Math.atan2(p.vy, fwd) * 1.3, -Math.atan2(p.vx, fwd) * 1.3, v.bank, 'YXZ');
       const flame = v.missile.getObjectByName('flame');
       if (flame) flame.scale.set(1, 1, (p.boosting ? 2.2 : 1) * (0.85 + Math.random() * 0.3));
       const sh = v.missile.getObjectByName('shield');
@@ -369,6 +379,18 @@ export class GameRenderer {
     gu.uWater.value = pal.water;
     this.ground.position.set(Math.round(v.camera.position.x / 10) * 10, 0, Math.round(v.camera.position.z / 10) * 10);
     this.city.prepareView(t, (id) => v.pilot.isTaken(id));
+    // plafond du couloir (absent dans les tunnels, qui ont un vrai plafond)
+    const pz = v.pilot.z;
+    const tunnel = this.world.districtDef(pz).ceiling !== undefined;
+    this.ceiling.visible = !tunnel;
+    if (!tunnel) {
+      const cy = this.world.ceilingAt(pz + 20);
+      this.ceiling.position.set(v.pilot.x, cy, -(pz + 600));
+      this.ceilingMat.uniforms.uNear.value = clamp(1 - (cy - v.pilot.y) / 7, 0, 1);
+    }
+    ambient.uLightPos.value.copy(v.missile.position);
+    ambient.uLightPos.value.z += 1.5;
+    ambient.uLightCol.value.set(v.color).multiplyScalar(v.pilot.alive ? (v.pilot.boosting ? 1.0 : 0.6) : 0);
     // les autres missiles restent visibles (écran partagé) ; le fantôme n'apparaît que dans sa vue
     for (const o of this.views) if (o.ghost) o.ghost.visible = o === v && !!o.ghostPos;
   }
