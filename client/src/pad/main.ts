@@ -12,7 +12,7 @@ import {
   encodeInput,
   sanitizeName,
 } from '../../../shared/protocol';
-import { AxisSettings, Quat, SteerStyle, deviceQuat, relativePitchRoll, shapeAxis, steerAngle, upAngleFromGravity } from './orientation';
+import { AxisSettings, angleDiff, gravityTilt, shapeAxis, upAngleFromGravity } from './orientation';
 
 // ---------------------------------------------------------------------------
 // État
@@ -24,10 +24,9 @@ const app = document.getElementById('app')!;
 
 interface Settings extends AxisSettings {
   vibrate: boolean;
-  steer: SteerStyle;
 }
 const SETTINGS_KEY = 'rm_pad_settings';
-const settings: Settings = { sensitivity: 1.15, deadZone: 0.04, invertY: false, vibrate: true, steer: 'both' };
+const settings: Settings = { sensitivity: 1, deadZone: 0.05, invertY: false, vibrate: true };
 try {
   Object.assign(settings, JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? '{}'));
 } catch {
@@ -63,8 +62,8 @@ let reconnectDelay = 500;
 let stopped = false;
 
 // orientation
-let qCur: Quat | null = null;
-let qRef: Quat | null = null;
+let tiltCur: { steer: number; pitch: number } | null = null;
+let tiltRef: { steer: number; pitch: number } | null = null;
 let gotSensor = false;
 let pitch = 0; // [-1, 1] (+ = monter)
 let roll = 0; // [-1, 1] (+ = droite)
@@ -107,8 +106,8 @@ function calibrateFrame() {
 function recenter() {
   if (raw) {
     calibrateFrame();
-    qCur = deviceQuat(raw[0], raw[1], raw[2], ctrlAngle);
-    qRef = [...qCur] as Quat;
+    tiltCur = gravityTilt(raw[0], raw[1], raw[2], ctrlAngle);
+    tiltRef = { ...tiltCur };
   }
   vibrate(12);
 }
@@ -119,12 +118,11 @@ function onOrientation(e: DeviceOrientationEvent) {
   const first = !raw;
   raw = [e.alpha ?? 0, e.beta, e.gamma];
   if (first) recenter();
-  qCur = deviceQuat(raw[0], raw[1], raw[2], ctrlAngle);
-  if (!qRef) qRef = [...qCur] as Quat;
-  const r = relativePitchRoll(qRef, qCur);
-  roll = shapeAxis(steerAngle(r, settings.steer), settings);
-  // tangage vers l'avant = piquer (axe vertical négatif), sauf inversion
-  pitch = shapeAxis(-r.pitch, settings) * (settings.invertY ? -1 : 1);
+  tiltCur = gravityTilt(raw[0], raw[1], raw[2], ctrlAngle);
+  if (!tiltRef) tiltRef = { ...tiltCur };
+  roll = shapeAxis(angleDiff(tiltCur.steer, tiltRef.steer), settings);
+  // haut de l'écran vers l'avant = piquer (axe vertical négatif), sauf inversion
+  pitch = shapeAxis(-angleDiff(tiltCur.pitch, tiltRef.pitch), settings) * (settings.invertY ? -1 : 1);
 }
 
 function vibrate(p: number | number[]) {
@@ -144,7 +142,7 @@ function renderJoin(message = '', bad = false) {
   app.innerHTML = `
     <div class="join">
       <h1>RASE-MOTTES</h1>
-      <div class="hint">Tiens le téléphone à l'horizontale, à deux mains. Tourne-le comme un volant ou pointe-le : le missile suit son orientation.</div>
+      <div class="hint">Tiens le téléphone à l'horizontale, à deux mains. Penche-le comme un volant pour tourner, bascule-le vers l'avant pour piquer.</div>
       <div class="row">
         <div class="field"><label for="room">Code du salon</label>
           <input id="room" maxlength="4" autocapitalize="characters" autocomplete="off" value="${roomCode}" /></div>
@@ -642,12 +640,6 @@ function openSettings() {
       <input type="range" id="sens" min="0.5" max="2" step="0.05" value="${settings.sensitivity}" /></div>
     <div class="opt"><span>Zone morte</span><span id="vdz">${Math.round(settings.deadZone * 100)} %</span>
       <input type="range" id="dz" min="0" max="0.25" step="0.01" value="${settings.deadZone}" /></div>
-    <div class="opt"><span>Direction</span>
-      <select id="steer" style="font-size:16px;padding:6px;border-radius:8px;background:#1a1830;color:#fff">
-        <option value="both" ${settings.steer === 'both' ? 'selected' : ''}>Volant + visée</option>
-        <option value="wheel" ${settings.steer === 'wheel' ? 'selected' : ''}>Volant (tourner)</option>
-        <option value="aim" ${settings.steer === 'aim' ? 'selected' : ''}>Visée (pointer)</option>
-      </select></div>
     <label class="opt"><span>Inverser l'axe vertical</span><input type="checkbox" id="inv" ${settings.invertY ? 'checked' : ''} /></label>
     <label class="opt"><span>Vibrations ${'vibrate' in navigator ? '' : '(non disponibles ici)'}</span><input type="checkbox" id="vib" ${settings.vibrate ? 'checked' : ''} /></label>
     <button class="primary big" id="close">Fermer</button>`;
@@ -670,11 +662,6 @@ function openSettings() {
   (document.getElementById('vib') as HTMLInputElement).onchange = (e) => {
     settings.vibrate = (e.target as HTMLInputElement).checked;
     saveSettings();
-  };
-  (document.getElementById('steer') as HTMLSelectElement).onchange = (e) => {
-    settings.steer = (e.target as HTMLSelectElement).value as SteerStyle;
-    saveSettings();
-    recenter();
   };
   document.getElementById('close')!.onclick = () => (s.hidden = true);
 }

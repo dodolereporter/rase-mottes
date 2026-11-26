@@ -12,7 +12,7 @@ import {
 } from '../../shared/protocol';
 import { Pilot } from '../../shared/sim';
 import { World } from '../../shared/world';
-import { axisAngle, deviceQuat, quatMul, relativePitchRoll, steerAngle, upAngleFromGravity } from '../../client/src/pad/orientation';
+import { angleDiff, axisAngle, deviceQuat, gravityTiltQ, quatMul, relativePitchRoll, steerAngle, upAngleFromGravity } from '../../client/src/pad/orientation';
 
 describe('protocole binaire', () => {
   it('encode et décode un paquet de 12 octets', () => {
@@ -122,6 +122,38 @@ describe('orientation du téléphone', () => {
   it('basculer le haut vers l’avant donne un tangage positif', () => {
     const q = quatMul(ref, axisAngle(1, 0, 0, (-10 * Math.PI) / 180));
     expect(relativePitchRoll(ref, q).pitch).toBeCloseTo(10, 3);
+  });
+});
+
+describe('inclinaison par la gravité (pilotage)', () => {
+  const deg = Math.PI / 180;
+  for (const [label, base] of [
+    ['tenu droit', deviceQuat(37, 0, -85, 90)],
+    ['tenu à 45°', deviceQuat(37, 0, -45, 90)],
+    ['presque à plat', deviceQuat(37, 0, -15, 90)],
+  ] as const) {
+    const ref = gravityTiltQ(base);
+    it(`${label} : pencher à droite fait tourner à droite`, () => {
+      // rotation « volant » horaire (autour de la normale) ...
+      const wheel = gravityTiltQ(quatMul(base, axisAngle(0, 0, 1, -20 * deg)));
+      // ... ou bord droit vers le bas (autour de l'axe vertical de l'écran)
+      const tray = gravityTiltQ(quatMul(base, axisAngle(0, 1, 0, 20 * deg)));
+      const both = Math.max(angleDiff(wheel.steer, ref.steer), angleDiff(tray.steer, ref.steer));
+      expect(both).toBeGreaterThan(8);
+      expect(angleDiff(wheel.steer, ref.steer)).toBeGreaterThan(-0.01);
+      expect(angleDiff(tray.steer, ref.steer)).toBeGreaterThan(-0.01);
+    });
+    it(`${label} : basculer le haut vers l'avant donne un tangage positif`, () => {
+      const fwd = gravityTiltQ(quatMul(base, axisAngle(1, 0, 0, -10 * deg)));
+      expect(angleDiff(fwd.pitch, ref.pitch)).toBeCloseTo(10, 0);
+      expect(Math.abs(angleDiff(fwd.steer, ref.steer))).toBeLessThan(0.5);
+    });
+  }
+  it('ne dépend pas du cap (alpha)', () => {
+    const a = gravityTiltQ(deviceQuat(0, 20, -60, 90));
+    const b = gravityTiltQ(deviceQuat(170, 20, -60, 90));
+    expect(a.steer).toBeCloseTo(b.steer, 6);
+    expect(a.pitch).toBeCloseTo(b.pitch, 6);
   });
 });
 

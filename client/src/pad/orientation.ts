@@ -59,6 +59,28 @@ export function relativePitchRoll(qRef: Quat, q: Quat): { pitch: number; roll: n
   return { pitch, roll, yaw };
 }
 
+/**
+ * Inclinaison à partir de la gravité vue dans le repère de l'écran (comme les jeux de course
+ * mobiles) : ne dépend ni de la boussole ni de alpha, donc ni dérive ni saut.
+ *   steer : penché vers la droite > 0 (gravité vers le bord droit de l'écran)
+ *   pitch : haut de l'écran basculé vers l'avant > 0
+ */
+export function gravityTilt(alpha: number, beta: number, gamma: number, screenAngleDeg: number): { steer: number; pitch: number } {
+  return gravityTiltQ(deviceQuat(alpha, beta, gamma, screenAngleDeg));
+}
+
+export function gravityTiltQ(q: Quat): { steer: number; pitch: number } {
+  const g = rotateVec(quatConj(q), [0, 0, -1]); // « vers le bas » dans le repère écran
+  const steer = Math.asin(Math.max(-1, Math.min(1, g[0]))) / DEG;
+  const pitch = Math.atan2(-g[2], -g[1]) / DEG;
+  return { steer, pitch };
+}
+
+/** Différence d'angles ramenée dans [-180, 180]. */
+export function angleDiff(a: number, b: number): number {
+  return ((((a - b + 180) % 360) + 360) % 360) - 180;
+}
+
 export type SteerStyle = 'both' | 'wheel' | 'aim';
 
 /** Angle de direction (deg) selon le style choisi : volant (roulis), visée (cap) ou les deux. */
@@ -86,7 +108,7 @@ export interface AxisSettings {
   invertY: boolean;
 }
 
-const MAX_ANGLE = 40;
+const MAX_ANGLE = 35;
 
 /** Angle (deg) -> axe normalisé [-1, 1] avec zone morte et sensibilité. */
 export function shapeAxis(deg: number, s: AxisSettings): number {
